@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Novel Ignite｜创作工作台</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="hero"><p class="eyebrow">NOVEL IGNITE · MVP WORKSPACE</p><h1>从一个想法，点燃一部小说</h1><p>当前可操作范围：Idea → Story Concept → Story Blueprint。AI 输出始终是候选，只有作者确认后才会写入故事事实。</p></header>
+    <nav class="steps" aria-label="创作流程"><button class="step active" data-step="idea" type="button">1 创意</button><span class="arrow">→</span><button class="step" data-step="concept" type="button">2 概念</button><span class="arrow">→</span><button class="step" data-step="blueprint" type="button">3 蓝图</button><span class="arrow">→</span><button class="step" data-step="chapters" type="button">4 章节</button><span class="arrow">→</span><button class="step disabled" data-step="workspace" type="button">5 工作台</button></nav>
+    <p id="feedback" class="feedback" role="status">开始一段新的创作，或加载已有 Story ID。</p>
+    <div class="toolbar" aria-label="生成模型选择"><label for="model-select">生成模型</label><select id="model-select"><option value="fake">加载中…</option></select><span id="model-hint" class="muted">AI 输出始终是候选，需作者确认。</span></div>
+    <section class="panel" id="idea-panel"><div class="section-heading"><div><p class="kicker">STEP 1</p><h2>你的故事想法</h2></div><button class="secondary" id="show-loader" type="button">加载已有故事</button></div><label>故事标题<input id="title" maxlength="200" placeholder="例如：记忆拍卖场"></label><label>创作意图<textarea id="idea" maxlength="10000" placeholder="描述主题、冲突、人物或背景……"></textarea></label><div class="actions"><button id="create-story" type="button">创建 Story 并生成 Concept →</button></div><div id="loader" class="hidden loader"><label>Story ID<input id="story-id" placeholder="输入已有 Story UUID"></label><button id="load-story" type="button">加载</button></div></section>
+    <section class="panel hidden" id="concept-panel"><div class="section-heading"><div><p class="kicker">STEP 2</p><h2>Story Concept</h2></div><span id="concept-version" class="badge">候选</span></div><p class="muted">生成后可编辑 JSON 内容；锁定字段以顶层字段名逗号分隔，例如 <code>genre,synopsis</code>。</p><label>Concept 候选 / 作者编辑内容<textarea id="concept-json" class="code-area" placeholder="点击“生成候选”开始"></textarea></label><label>锁定字段<input id="concept-locks" placeholder="genre,synopsis（可选）"></label><div class="actions"><button class="secondary" id="generate-concept" type="button">生成候选</button><button id="confirm-concept" type="button">确认 Concept →</button></div></section>
+    <section class="panel hidden" id="blueprint-panel"><div class="section-heading"><div><p class="kicker">STEP 3</p><h2>Story Blueprint</h2></div><span id="blueprint-status" class="badge">待生成</span></div><p class="muted">请审核并编辑候选内容。Baseline 保存稳定设定；Living State 是当前有效状态投影，两者独立版本化。</p><div class="grid two"><label>Initial Story Bible<textarea id="bible-json" class="code-area"></textarea></label><label>Story Arc<textarea id="arc-json" class="code-area"></textarea></label></div><label>Living State<textarea id="living-json" class="code-area"></textarea></label><div class="actions"><button class="secondary" id="generate-blueprint" type="button">生成蓝图候选</button><button id="confirm-blueprint" type="button">确认 Blueprint</button></div></section>
+    <section class="panel hidden" id="chapters-panel"><div class="section-heading"><div><p class="kicker">STEP 4</p><h2>Chapter Plan</h2></div><span id="chapter-count" class="badge">等待生成</span></div><p class="muted">先确认全书章节雏形。仅第 1 章会被激活；后续章节可查看规划，但需完成前一章并确认状态变化后才可进入。</p><div class="actions"><label class="inline-field">章节数量<select id="chapter-count-input"><option value="6">6 章（推荐）</option><option value="10">10 章</option><option value="12">12 章</option></select></label><button id="generate-chapters" type="button">生成章节计划 →</button></div><div id="chapter-cards" class="chapter-grid" aria-live="polite"></div></section>
+    <section class="panel hidden" id="workspace-panel"><div class="section-heading"><div><p class="kicker">STEP 5</p><h2 id="workspace-title">Chapter Workspace</h2></div><span class="badge">当前章</span></div><p id="workspace-message" class="muted">章节工作台将在下一阶段交付 Chapter Context、Scene Plan 与 Beat Plan。本章入口已受服务端 active 状态保护。</p><button id="back-to-chapters" class="secondary" type="button">← 返回 Chapter Plan</button></section>
+    <section id="state-panel" class="hidden" aria-live="polite">
+      <div class="story-heading"><p id="story-status" class="badge"></p><h2 id="story-title"></h2><span id="current-story-id" class="story-id"></span></div>
+      <div class="grid two">
+        <article class="panel"><h3>Baseline · Initial Story Bible</h3><p>Characters、World 与 Initial Timeline 的稳定设定。</p><pre id="bible">尚未确认</pre></article>
+        <article class="panel"><h3>Baseline · Story Arc</h3><p>核心冲突、主要阶段和全书方向。</p><pre id="arc">尚未确认</pre></article>
+      </div>
+      <article class="panel living"><h3>Living State · 当前有效投影</h3><p>只应由确认后的 Chapter Delta 更新；此处不将未来计划当成事实。</p><pre id="living-state">尚未确认</pre></article>
+      <h2>状态条目</h2>
+      <p class="muted">每条记录保留来源、时间边界、确认级别与 AI 上下文策略。</p>
+      <div class="grid three">
+        <section class="panel"><h3>Character State</h3><div id="character-states" class="state-list"></div></section>
+        <section class="panel"><h3>World State</h3><div id="world-states" class="state-list"></div></section>
+        <section class="panel"><h3>Timeline State</h3><div id="timeline-states" class="state-list"></div></section>
+      </div>
+    </section>
+    </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>

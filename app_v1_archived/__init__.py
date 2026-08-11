@@ -1,0 +1,1 @@
+"""Novel Ignite application package."""

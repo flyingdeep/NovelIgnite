@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Novel Ignite｜MVP 技术架构规范 v2.0</title><style>
+:root{--n:#10223f;--b:#2364dd;--s:#eff6ff;--i:#172033;--m:#64748b;--l:#dbe4f0;--bg:#f7f9fc;--g:#07855b;--w:#c86b08;--c:#14233d}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--i);font:15px/1.7 Inter,"Microsoft YaHei",system-ui,sans-serif}.hero{background:radial-gradient(circle at 80% 0,#396ee1,transparent 34%),linear-gradient(135deg,#10203a,#1f437f);color:#fff;padding:64px max(6vw,26px) 54px}.hero-in,.layout{max-width:1280px;margin:auto}.eye{font-weight:800;color:#abd1ff;letter-spacing:.13em;font-size:12px}.hero h1{font-size:clamp(34px,5vw,60px);line-height:1.08;margin:12px 0}.hero p{max-width:810px;color:#d7e6ff;font-size:18px}.pill{display:inline-block;margin:8px 6px 0 0;padding:4px 11px;border:1px solid #7ba8f0;border-radius:99px;font-size:12px}.layout{display:grid;grid-template-columns:230px minmax(0,1fr);gap:44px;padding:30px 26px 90px}.toc{position:sticky;top:18px;align-self:start;background:#fff;border:1px solid var(--l);border-radius:13px;padding:14px}.toc b{display:block;margin:3px 8px 7px}.toc a{display:block;color:#526278;text-decoration:none;padding:6px 8px;border-radius:6px;font-size:13px}.toc a:hover{background:var(--s);color:var(--b)}main{min-width:0}h2{font-size:28px;line-height:1.25;margin:58px 0 14px;padding-top:4px}h3{font-size:18px;margin:0 0 8px}.lead{font-size:18px;color:#475569;max-width:920px}.call{padding:17px 20px;background:var(--s);border-left:4px solid var(--b);border-radius:10px}.warn{background:#fff8eb;border-left-color:var(--w)}.grid{display:grid;gap:16px}.g2{grid-template-columns:repeat(2,minmax(0,1fr))}.g3{grid-template-columns:repeat(3,minmax(0,1fr))}.card{background:#fff;border:1px solid var(--l);border-radius:13px;padding:19px;box-shadow:0 2px 8px #17203308}.card p,.card ul{color:var(--m)}.flow{display:flex;gap:8px;align-items:stretch;flex-wrap:wrap}.flow span{padding:10px 12px;background:#fff;border:1px solid var(--l);border-radius:8px;font-weight:700}.flow span:not(:last-child):after{content:'→';margin-left:16px;color:var(--b)}.diagram{background:var(--c);border-radius:13px;color:#d8e8ff;padding:20px;overflow:auto;font:13px/1.6 ui-monospace,Consolas,monospace;white-space:pre}.diagram em{color:#8bd5ff;font-style:normal}.diagram strong{color:#8fe4b4}table{width:100%;border-collapse:separate;border-spacing:0;background:#fff;border:1px solid var(--l);border-radius:12px;overflow:hidden}th,td{padding:11px 12px;vertical-align:top;text-align:left;border-bottom:1px solid var(--l)}tr:last-child td{border:0}th{color:#475569;background:#f1f5f9;font-size:12px}td{color:#475569}td b{color:var(--i)}code{font:12px ui-monospace,Consolas,monospace;background:#eaf0f7;border-radius:4px;padding:2px 5px;color:#24395f}.badge{font-size:11px;padding:2px 7px;border-radius:99px;font-weight:800;background:#fef3c7;color:#a55d00}.mvp{background:#dcfce7;color:#08734e}.rule{border-left:3px solid var(--b);padding:4px 0 4px 13px;margin:10px 0}.rule b{display:block}.rule span{color:var(--m)}.check{list-style:none;padding:0;margin:0}.check li{margin:7px 0;color:#475569}.check li:before{content:'✓';font-weight:bold;color:var(--g);margin-right:8px}.foot{margin-top:54px;color:var(--m);font-size:13px}.new{background:#dcfce7;color:#08734e;border:1px solid #8fe4b4;border-radius:99px;padding:2px 8px;font-size:10px;font-weight:800}@media(max-width:900px){.layout{grid-template-columns:1fr;gap:10px}.toc{position:static;display:flex;flex-wrap:wrap;gap:2px}.toc b{width:100%}}@media(max-width:560px){.hero{padding-top:46px}.flow span:not(:last-child):after{display:none}}
+</style></head><body>
+<header class="hero"><div class="hero-in"><div class="eye">NOVEL IGNITE · NORMATIVE MVP SPECIFICATION · v2.0</div><h1>技术架构与实现规范</h1><p>本文件定义 MVP v2 的实现事实来源。UI 以 prototype/ 为权威参考；后端按本规范分层实现。未标为 MVP 的能力不应提前实现。</p><span class="pill">Python 3.12+</span><span class="pill">FastAPI</span><span class="pill">SQLAlchemy 2.x</span><span class="pill">Alembic</span><span class="pill">SQLite</span><span class="pill">pytest</span></div></header>
+<div class="layout"><nav class="toc"><b>目录</b><a href="#scope">01 范围与关键决策</a><a href="#architecture">02 架构与模块</a><a href="#domain">03 领域模型</a><a href="#data">04 数据与约束</a><a href="#workflow">05 工作流与状态机</a><a href="#ai">06 AI 适配与上下文</a><a href="#api">07 API 契约</a><a href="#reliability">08 可靠性与安全</a><a href="#delivery">09 工程交付与验收</a></nav><main>
+<p class="lead">产品严格遵循六步页面流程：“<b>作品库</b> → User Idea → Story Concept → Story Blueprint → Chapter Plan → Chapter Workspace → Next Chapter”。UI 交互与信息架构以 <code>prototype/index.html</code> 为唯一权威参考；所有后端实现必须驱动原型中已定义的用户可见状态与交互。AI 永远生成候选内容；只有作者显式确认或应用，候选内容才会改变权威数据。</p>
+
+<section id="scope"><h2>01 · 范围与关键决策</h2>
+<div class="grid g2">
+<article class="card"><h3>本期必须交付 <span class="badge mvp">MVP Phase 1–6</span></h3><ul><li>独立的作品库页面，支持多作品管理、创建与删除。</li><li>六步统一导航：作品库、创意、概念、蓝图、章节、工作台。</li><li>AI 生成设置中心（模型选择、temperature、推理强度），对所有生成入口生效。</li><li>逐章激活的顺序写作：Scene → Beat → Prose → Delta → 下一章。</li><li>State Snapshot / State Delta / 一致性检查 / 后续章节失效标记。</li></ul></article>
+<article class="card"><h3>明确不在本期 <span class="badge">Phase 3+</span></h3><ul><li>账号权限、多作者协同、Redis、向量检索、图数据库与故事分支。</li><li>并行生成多个 Scene、自动无确认重写后续正文。</li><li>生产 PostgreSQL 与富文本格式；正文权威格式为 Markdown。</li></ul></article></div>
+<div class="call warn" style="margin-top:16px"><b>v2.0 与 v1.x 的关键差异：</b>① 新增作品库作为入口（多故事管理）；② UI 原型为唯一交互事实来源；③ 统一 AI 生成设置取代分散的模型下拉；④ 章节/Scene 一键生成按钮紧随内容标题；⑤ 创意页在概念生成后自动锁定为只读。<br><b>优先级裁决：</b>作者已锁定事实 &gt; 作者已确认内容 &gt; 当前章节已应用内容 &gt; 生成建议 &gt; 未确认计划。</div></section>
+
+<section id="architecture"><h2>02 · 架构与模块边界</h2>
+<div class="diagram"><em>Browser UI (prototype/)</em> ── HTTPS / JSON ──▶ <em>FastAPI API</em>
+                                    │
+         ┌──────────────────────────┼──────────────────────────┐
+         ▼                          ▼                          ▼
+ <strong>Application services</strong>       <strong>AI adapter</strong>                <strong>Repositories</strong>
+ works · projects · lore            OpenAI-compatible              SQLAlchemy Unit of Work
+ planning · writing · consistency   configurable per-task          SQLite + Alembic
+         │                          │                          │
+         └────────────── audit / generation records ───────────┘</div>
+<div class="grid g3" style="margin-top:16px">
+<article class="card"><h3>API 层</h3><p>路由仅验证 DTO、调用应用服务。返回 Pydantic 模型；不泄露 ORM、密钥或完整提示词。</p></article>
+<article class="card"><h3>应用服务层</h3><p>唯一业务入口。负责状态前置校验、事务、乐观锁、审计与跨模块编排。</p></article>
+<article class="card"><h3>领域 / 仓储层</h3><p>领域规则无 HTTP 依赖；仓储只查询和持久化，不编排 AI 或 UI 逻辑。</p></article></div>
+<table style="margin-top:16px"><thead><tr><th>模块</th><th>拥有的数据 / 行为</th><th>禁止事项</th></tr></thead><tbody>
+<tr><td><b>works</b> <span class="new">NEW</span></td><td>多作品列表、创建/删除故事、故事分类与阶段展示</td><td>直接生成正文或访问模型客户端</td></tr>
+<tr><td><b>projects</b></td><td>Story、创意文本、Concept、Blueprint 生命周期与阶段推进</td><td>直接生成正文或访问模型客户端</td></tr>
+<tr><td><b>lore</b></td><td>全局实体（人物/地点/组织/物品/规则）、稳定属性、Lock、来源与版本履历</td><td>复制章节专属人物实体；存储未确认计划为事实</td></tr>
+<tr><td><b>planning</b></td><td>Chapter、Event、Scene、Beat 与顺序控制</td><td>把计划事件当已发生事实</td></tr>
+<tr><td><b>writing</b></td><td>上下文装配、生成任务、候选内容、Markdown 版本</td><td>未经 apply 更新 Story State</td></tr>
+<tr><td><b>consistency</b></td><td>Snapshot、Delta、规则检查、影响分析与 stale 标记</td><td>静默修复作者正文或锁定事实</td></tr></tbody></table></section>
+
+<section id="domain"><h2>03 · 领域模型与不变量</h2>
+<div class="diagram"><strong>Story</strong> 1 ── 1 <strong>Idea</strong> (locked after concept generated)
+  │
+  ├── 1 <strong>Concept</strong> (candidate, confirmed)
+  ├── 1 <strong>Blueprint</strong> (baseline + living state)
+  │   ├── * Entity (Character | Location | Organization | Item | WorldRule)
+  │   ├── * StoryArc
+  │   └── * StateEntry (confirmed only)
+  │
+  └── * <strong>Chapter</strong> 1 ── * <strong>Scene</strong> 1 ── * <strong>Beat</strong>
+                    │                    │
+                    ├── 1 StateSnapshot  ├── * ProseVersion
+                    ├── * ChapterEvent   └── * GenerationTask
+                    └── * StateDelta</div>
+<div class="grid g2" style="margin-top:16px">
+<article class="card"><h3>核心不变量</h3>
+<div class="rule"><b>作品库入口 <span class="new">NEW</span></b><span>用户从作品库选择或创建故事；未进入故事前，创意/概念/蓝图/章节/工作台 5 个步骤不可见。</span></div>
+<div class="rule"><b>创意只读保护 <span class="new">NEW</span></b><span>Story Concept 生成后，Idea 页面自动锁定为只读；原始创意不再修改但始终可查看。</span></div>
+<div class="rule"><b>Blueprint 双层结构</b><span>Baseline 保存稳定设定（Characters/World/Timeline/Story Arc）；Living State 投影当前人物/世界/时间线状态。四类 Baseline 确认时创建初始 Living State，后续仅由确认后的 Chapter Delta 更新。</span></div>
+<div class="rule"><b>逐章激活</b><span>首次只激活 Chapter 1；仅当前章完成且 Delta 经作者确认后，才激活 ordinal + 1。</span></div>
+<div class="rule"><b>严格顺序生成</b><span>Scene 和 Beat 均按 ordinal 生成，不可跳过前置项。</span></div>
+<div class="rule"><b>Snapshot 无未来信息</b><span>第 N 章 Snapshot 仅来自 Initial State 与小于 N 的已确认 Delta。</span></div>
+<div class="rule"><b>恢复不覆盖</b><span>恢复历史内容创建新版本，保留版本链与恢复原因。</span></div></article>
+<article class="card"><h3>领域状态</h3>
+<table><tbody>
+<tr><td><b>Story</b></td><td>idea → idea_locked → concept_review → concept_confirmed → blueprint_review → blueprint_confirmed → chapter_planning → writing → done</td></tr>
+<tr><td><b>Chapter</b></td><td>outline → locked → active → generating → delta_review → completed；历史变更后 stale</td></tr>
+<tr><td><b>Scene / Beat</b></td><td>planned → available → generating → generated → applied → completed</td></tr>
+<tr><td><b>GenerationTask</b></td><td>queued → running → succeeded / failed / cancelled；成功不代表已应用</td></tr>
+<tr><td><b>Delta</b></td><td>proposed → checked → confirmed / rejected</td></tr></tbody></table></article></div></section>
+
+<section id="data"><h2>04 · 持久化模型与约束</h2>
+<p>所有 schema 变更必须以 Alembic migration 提交。时间使用 UTC ISO-8601；主键使用 UUID；可变 JSON 在 Pydantic DTO 校验后存储。</p>
+<table><thead><tr><th>表 / 聚合</th><th>关键字段</th><th>约束与索引</th></tr></thead><tbody>
+<tr><td><b>stories</b> <span class="new">UPDATED</span></td><td>id, title, stage, idea_text, active_chapter_ordinal, version, deleted_at</td><td>stage ∈ idea/idea_locked/concept_review/concept_confirmed/blueprint_review/blueprint_confirmed/chapter_planning/writing/done；version 乐观锁；软删除</td></tr>
+<tr><td><b>ai_configs</b> <span class="new">NEW</span></td><td>story_id, model, temperature, reasoning_strength</td><td>每 Story 可有一个活跃配置；生成任务引用配置快照</td></tr>
+<tr><td><b>story_artifacts</b></td><td>story_id, kind, layer, payload, status, locked_paths, source_task_id</td><td>kind ∈ concept/bible/arc/living_state；layer ∈ baseline/living；追加版本化；Concept candidate 需确认后成为权威</td></tr>
+<tr><td><b>entities</b></td><td>story_id, type, name, canonical_data, lock_state, version_history</td><td>unique(story_id,type,name)；每条实体记录版本履历</td></tr>
+<tr><td><b>chapters</b></td><td>story_id, ordinal, title, summary, plan_status, access_status, version, stale_reason</td><td>unique(story_id,ordinal)；plan_status ∈ outline/fixed/revised；access_status ∈ locked/active/completed</td></tr>
+<tr><td><b>scenes / beats</b></td><td>chapter_id / scene_id, ordinal, plan, status</td><td>父级内 ordinal 唯一；仅最小未完成 ordinal 可 available</td></tr>
+<tr><td><b>state_snapshots</b></td><td>chapter_id, based_on_chapter, state, state_hash</td><td>每 Chapter 一个；激活章节前创建</td></tr>
+<tr><td><b>state_deltas</b></td><td>scope_type, scope_id, source_version_id, changes, status, check_result</td><td>scope ∈ beat/scene/chapter；仅 confirmed Chapter Delta 更新 Story State</td></tr>
+<tr><td><b>prose_versions</b></td><td>chapter_id, scene_id, beat_id, markdown, parent_id, version, applied_by</td><td>append-only；目标+version 唯一</td></tr>
+<tr><td><b>generation_tasks</b></td><td>target_type/id, action, start_ordinal, input_ref, output_summary, model_snapshot, status, error_type</td><td>action ∈ generate_concept/generate_blueprint/generate_scene/generate_chapter_remaining/regenerate_beat；model_snapshot 冻结当前 AI 配置；失败不覆盖作者原文</td></tr>
+<tr><td><b>consistency_issues</b></td><td>story_id, chapter_id, checkpoint, rule, severity, evidence, status</td><td>checkpoint ∈ beat/scene/chapter</td></tr></tbody></table>
+<div class="call" style="margin-top:16px"><b>Snapshot 推导：</b><code>S₁ = initial_state</code>；<code>Sₙ = apply(Sₙ₋₁, Dₙ₋₁)</code>。若第 k 章确认内容或 Delta 改变，所有 <code>n &gt; k</code> 的 Snapshot 标记 <code>stale</code>，按序重算。</div></section>
+
+<section id="workflow"><h2>05 · 工作流、检查点与失效处理</h2>
+<h3>六步作者流程</h3>
+<div class="flow"><span>作品库</span><span>创意</span><span>概念</span><span>蓝图</span><span>章节</span><span>工作台</span></div>
+<p style="color:var(--m);font-size:13px;margin-top:8px">作品库为入口（多故事管理）；进入故事后显示创意→工作台 5 步；创意页在概念生成后锁定为只读。</p>
+
+<h3 style="margin-top:22px">章节写作主流程</h3>
+<div class="flow"><span>激活当前章</span><span>构建 Chapter Context</span><span>确认 Scene Plan</span><span>确认 Beat Plan</span><span>顺序生成正文</span><span>确认 Chapter Delta</span><span>更新 Living State</span><span>激活下一章</span></div>
+
+<div class="grid g2" style="margin-top:16px">
+<article class="card"><h3>两种生成入口，同一执行器</h3><ol>
+<li><b>生成整个章节：</b>从当前第一个未完成 Beat 开始，按 Scene/Beat ordinal 循环到本章结束。</li>
+<li><b>生成整个 Scene：</b>从该 Scene 第一个未完成 Beat 开始，逐 Beat 生成到该 Scene 结束。</li>
+<li>若已有部分正文，执行器从最后一个已应用 Beat 继续。</li>
+<li>重新生成只允许当前或已生成 Beat；生成后创建新正文版本并触发后续影响分析。</li></ol></article>
+<article class="card"><h3>逐级检查点</h3><table><tbody>
+<tr><td><b>Beat 完成</b></td><td>提取局部事实候选，检查知识/地点/物品/关系/世界规则；更新当前 Scene 临时上下文。</td></tr>
+<tr><td><b>Scene 完成</b></td><td>合并 Beat 候选为 Scene Delta，生成 Scene Summary，检查是否需修订后续计划。</td></tr>
+<tr><td><b>Chapter 完成</b></td><td>合并 Scene Delta 为 Chapter Delta；作者确认后更新 Story State / Living State 与后序雏形。</td></tr></tbody></table></article></div>
+
+<h3 style="margin-top:22px">Blueprint 更新边界</h3>
+<table><thead><tr><th>检查点</th><th>可自动准备的候选</th><th>不得自动改变</th></tr></thead><tbody>
+<tr><td>Beat / Scene 完成</td><td>人物状态、物品归属、事件、剧情线进度、场景摘要；后续计划修订建议</td><td>锁定的 Baseline、已确认正文、已确认历史 Delta</td></tr>
+<tr><td>Chapter 完成</td><td>Chapter Delta、Living State 新投影、后序章节雏形修订</td><td>下一章正文、未来事件的"已发生"状态</td></tr>
+<tr><td>作者修改 Baseline</td><td>影响范围、需重算章节与计划修订建议</td><td>未经确认直接重写现有章节</td></tr></tbody></table></section>
+
+<section id="ai"><h2>06 · AI 适配、上下文与生成设置 <span class="new">UPDATED</span></h2>
+<div class="grid g2">
+<article class="card"><h3>模型适配层契约</h3><ul><li>输入：任务类型、结构化上下文引用、参数快照（来自 AI 生成设置）、令牌预算。</li><li>输出：Pydantic 校验的结构化候选；解析失败标 failed。</li><li>支持 OpenAI Chat Completions 兼容端点；密钥仅服务端环境读取。</li><li>超时、网络错误、无效 JSON 均保留作者草稿，可重试。</li></ul></article>
+<article class="card"><h3>统一 AI 生成设置 <span class="new">NEW</span></h3><ul><li>作者可随时通过「⚙ 生成设置」配置模型、Temperature、推理强度。</li><li>配置跨任务生效，但每次生成时会记录参数快照至 generation_tasks.model_snapshot。</li><li>配置入口置于每个有生成操作的页面（创意、概念、蓝图、章节、工作台）。</li></ul></article></div>
+<table style="margin-top:16px"><thead><tr><th>上下文装配算法</th><th>规则</th></tr></thead><tbody>
+<tr><td>1. 确定时间边界</td><td>当前 Chapter ordinal - 1。</td></tr>
+<tr><td>2. 装入目标与 Snapshot</td><td>目标 Beat/Scene/Chapter 计划 + 本章 State Snapshot。</td></tr>
+<tr><td>3. 按预算注入</td><td>当前计划 → Lock 事实 → 相关实体 → 场景摘要 → 最近正文。</td></tr>
+<tr><td>4. 记录引用</td><td>选中对象的 ID 与 hash，供复现与审计。</td></tr>
+<tr><td>5. 禁止装入</td><td>未来 Delta、未来正文、未确认计划作为事实。</td></tr></tbody></table></section>
+
+<section id="api"><h2>07 · HTTP API 契约</h2>
+<p>路由以 <code>/api/v1</code> 为前缀，JSON 使用 <code>snake_case</code>。写操作接受 <code>expected_version</code>；响应包含 <code>id</code>、<code>version</code>、<code>updated_at</code>。</p>
+<table><thead><tr><th>方法与路径</th><th>目的</th><th>关键语义</th></tr></thead><tbody>
+<tr><td><code>GET /works</code> <span class="new">NEW</span></td><td>获取作品列表</td><td>支持软删除过滤；返回阶段、进度、封面</td></tr>
+<tr><td><code>POST /works</code> <span class="new">NEW</span></td><td>创建新作品</td><td>stage="idea"；返回空 Idea 的故事</td></tr>
+<tr><td><code>DELETE /works/{id}</code> <span class="new">NEW</span></td><td>删除作品</td><td>软删除；需确认</td></tr>
+<tr><td><code>GET /works/{id}</code> <span class="new">NEW</span></td><td>读取作品详情与阶段</td><td>包含 current_stage、进度、更新时间</td></tr>
+<tr><td><code>GET /stories/{id}/idea</code></td><td>读取创意文本</td><td>返回 idea_text 与锁定状态</td></tr>
+<tr><td><code>PUT /stories/{id}/idea</code></td><td>保存创意文本</td><td>仅 stage=idea 时可写；stage≥idea_locked 返回 409</td></tr>
+<tr><td><code>GET /stories/{id}/concept</code> <span class="new">NEW</span></td><td>读取最新 Concept 候选/确认版本</td><td>返回 payload、status、version、locked_paths、source_task_id</td></tr>
+<tr><td><code>POST /stories/{id}/generations</code> <span class="new">UPDATED</span></td><td>生成 Concept 候选</td><td>action=generate_concept；记录 ai_config snapshot；只创建 candidate，不自动确认</td></tr>
+<tr><td><code>PUT /stories/{id}/concept</code> <span class="new">NEW</span></td><td>编辑 Concept 候选</td><td>追加新版本；expected_version；锁定字段不得修改</td></tr>
+<tr><td><code>POST /stories/{id}/concept/confirm</code> <span class="new">NEW</span></td><td>确认 Concept</td><td>candidate → confirmed；重复确认和版本冲突返回 409</td></tr>
+<tr><td><code>POST /stories/{id}/generations</code></td><td>生成 Concept / Blueprint / Scene / Chapter</td><td>action、target；携带 ai_config_snapshot</td></tr>
+<tr><td><code>GET /models</code> <span class="new">NEW</span></td><td>列出可用模型</td><td>模型名、能力（是否支持结构化响应）</td></tr>
+<tr><td><code>PUT /stories/{id}/ai-config</code> <span class="new">NEW</span></td><td>保存 AI 生成设置</td><td>model、temperature、reasoning_strength</td></tr>
+<tr><td><code>PUT /stories/{id}/artifacts/{kind}</code></td><td>编辑、锁定、确认 Concept / Blueprint</td><td>payload、layer、locked_paths、expected_version</td></tr>
+<tr><td><code>POST /stories/{id}/chapter-plan</code></td><td>从蓝图生成章节雏形</td><td>首次仅 Chapter 1 为 fixed+active</td></tr>
+<tr><td><code>GET /stories/{id}/chapters</code> <span class="new">UPDATED</span></td><td>读取章节卡片地图</td><td>返回 ordinal、title、goal、summary、plan_status、access_status、progress</td></tr>
+<tr><td><code>GET /stories/{id}/chapters/{chapter_id}</code> <span class="new">NEW</span></td><td>读取单章计划</td><td>锁定章节可读但不可进入工作台</td></tr>
+<tr><td><code>PUT /stories/{id}/chapters/{chapter_id}/plan</code> <span class="new">NEW</span></td><td>编辑章节计划</td><td>仅 active Chapter 可编辑；locked 返回 409；expected_version 防止覆盖</td></tr>
+<tr><td><code>GET /stories/{id}/chapters</code></td><td>读取章节卡片地图</td><td>plan_status、access_status、progress、stale_reason</td></tr>
+<tr><td><code>PUT /chapters/{id}/plan</code></td><td>确认 Chapter Event / Scene / Beat Plan</td><td>只能操作 active Chapter</td></tr>
+<tr><td><code>POST /chapters/{id}/generations</code></td><td>生成当前 Scene 或本章剩余</td><td>action ∈ generate_scene/generate_chapter_remaining</td></tr>
+<tr><td><code>POST /beats/{id}/prose-versions</code></td><td>应用 Beat 正文</td><td>markdown、expected_version；追加版本</td></tr>
+<tr><td><code>GET /chapters/{id}/context</code></td><td>读取 Chapter Context</td><td>Snapshot、Events、来源、stale</td></tr>
+<tr><td><code>POST /deltas/{id}/confirm</code></td><td>确认 Chapter Delta</td><td>更新 Story State / Living State，激活下一章</td></tr>
+<tr><td><code>GET /issues</code></td><td>读取一致性问题</td><td>按 checkpoint/chapter/severity 筛选</td></tr></tbody></table></section>
+
+<section id="reliability"><h2>08 · 可靠性、安全与可观测性</h2>
+<div class="grid g2">
+<article class="card"><h3>必须遵守</h3><ul class="check"><li>所有可变内容版本化；恢复创建新版本，不覆盖历史。</li><li>正文与计划使用乐观锁；禁止静默覆盖。</li><li>模型密钥仅服务端读取，<code>.env.example</code> 仅放占位符。</li><li>日志不记录正文全文、完整 prompt 或密钥；仅 hash、长度、对象 ID、耗时和失败类别。</li><li>删除、批量替换、恢复需要确认 API 与审计记录。</li><li>生成设置随任务记录为参数快照。</li></ul></article>
+<article class="card"><h3>配置与运行边界</h3><ul><li><code>DATABASE_URL=sqlite:///./novel_ignite.db</code></li><li><code>MODEL_BASE_URL</code>、<code>MODEL_API_KEY</code>、<code>MODEL_NAME</code> 仅后端使用。</li><li>本地与测试用 SQLite；测试用 fake adapter，不请求外网。</li><li>生产数据库、队列和持久化任务仅在 ADR 批准的后续 Phase 引入。</li></ul></article></div></section>
+
+<section id="delivery"><h2>09 · 工程结构、验收与演进</h2>
+<div class="diagram">app/
+  api/               # routes + Pydantic DTOs
+  infrastructure/    # db, config, model adapter
+  works/             # 作品库 <span class="new">NEW</span>
+  projects/          # story, idea, concept, blueprint
+  lore/              # 全局实体、Lock、版本履历
+  planning/          # chapters, scenes, beats
+  writing/           # context, generation, prose versions
+  consistency/       # snapshots, deltas, rules, impact
+  main.py
+prototype/           # UI 权威参考 <span class="new">NEW</span>
+tests/  migrations/  docs/</div>
+<div class="grid g2" style="margin-top:16px">
+<article class="card"><h3>最低自动化验收</h3><ul class="check"><li>迁移从空库升级，约束可验证。</li><li>创意页在概念生成后不可编辑（409），生成按钮隐藏。</li><li>Lock 事实不能被生成或普通编辑覆写。</li><li>版本冲突返回 409，历史版本仍可读取。</li><li>应用正文后创建候选 Delta，不自动确认。</li><li>历史变更精确标记后续章节 stale。</li><li>模型超时/输出错误不改变作者正文。</li><li>原型中定义的所有页面、弹窗、状态均有后端 API 支撑。</li></ul></article>
+<article class="card"><h3>Phase 2+ 演进门槛</h3><p>仅在 MVP 闭环稳定后，按 ADR 引入 PostgreSQL、异步 worker、向量检索或 Story Branch。迁移必须保留对象 ID、版本历史、Snapshot 与 Delta 的可复算性。原型持续同步为交互事实来源。</p></article></div>
+<p class="foot">事实来源：<code>../prototype/index.html</code>（UI 交互）· <code>../NOVEL_IGNITE_需求文档_V2.md</code>（产品需求）。本规范 v2.0 以原型为架构基座；旧 v1.x 规范随 app_v1_archived/ 归档。版本：v2.0 · 2026-08-11</p></section>
+</main></div></body></html>
