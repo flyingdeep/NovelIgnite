@@ -1,3 +1,5 @@
+// 离线演示数据：API 可用时由后端 Blueprint 工件完全覆盖（entries 会被真实数据替换/清空），
+// 不进入任何模型输入链；renderBlueprint 在无真实数据时渲染空状态，绝不会展示此处的演示条目。
 const blueprintData = {
   characters: {
     title: "人物 · 全局实体",
@@ -467,19 +469,20 @@ async function loadConceptForCurrentStory() {
 }
 
 function blueprintPayloadToUi(kind, artifact) {
-  if (!artifact?.payload) return;
-  const entry = artifact.payload.entries?.[0];
-  if (!entry) return;
-  const fields = entry.fields || {};
-  blueprintData[kind].entries = [{
-    name: entry.name || kind,
-    role: entry.role || "全局设定",
-    version: artifact.version,
-    updated: artifact.updated_at?.slice(0, 10) || "刚刚",
-    lock: artifact.locked_paths?.length ? "部分字段已锁定" : "",
-    fields: Object.entries(fields).map(([label, value]) => [label, Array.isArray(value) ? value.join("；") : String(value)]),
-    history: [{ version: `v${artifact.version}`, date: artifact.updated_at?.slice(0, 10) || "刚刚", by: artifact.status === "confirmed" ? "作者确认" : "AI 候选", note: "来自真实 Blueprint API", detail: "当前版本从后端 Story Artifact 读取。" }],
-  }];
+  if (!blueprintData[kind]) return;
+  const entries = artifact?.payload && Array.isArray(artifact.payload.entries) ? artifact.payload.entries : [];
+  blueprintData[kind].entries = entries.map((entry) => {
+    const fields = entry.fields || {};
+    return {
+      name: entry.name || kind,
+      role: entry.role || "全局设定",
+      version: artifact.version,
+      updated: artifact.updated_at?.slice(0, 10) || "刚刚",
+      lock: artifact.locked_paths?.length ? "部分字段已锁定" : "",
+      fields: Object.entries(fields).map(([label, value]) => [label, Array.isArray(value) ? value.join("；") : String(value)]),
+      history: [{ version: `v${artifact.version}`, date: artifact.updated_at?.slice(0, 10) || "刚刚", by: artifact.status === "confirmed" ? "作者确认" : "AI 候选", note: "来自真实 Blueprint API", detail: "当前版本从后端 Story Artifact 读取。" }],
+    };
+  });
 }
 
 async function loadBlueprintForCurrentStory() {
@@ -550,7 +553,9 @@ function renderBlueprint(kind = "characters") {
     return;
   }
   const entry = blueprintData[kind];
-  const cards = entry.entries.map((item, index) => `
+  const entries = entry.entries || [];
+  const cards = entries.length
+    ? entries.map((item, index) => `
     <article class="bp-entry">
       <div class="bp-entry-head">
         <div><h3>${item.name}</h3><span class="bp-role">${item.role}</span></div>
@@ -558,13 +563,21 @@ function renderBlueprint(kind = "characters") {
       </div>
       <div class="bp-fields">${item.fields.map(([label, value]) => `<div class="bp-field"><span>${label}</span><p>${value}</p></div>`).join("")}</div>
       <div class="bp-entry-foot"><button class="text-button history-link" type="button" data-history="${kind}|${index}">查看更新履历（${item.history.length} 条）</button></div>
-    </article>`).join("");
+    </article>`).join("")
+    : `<div class="books-empty"><h3>该分类暂无条目</h3><p>重新生成候选后，AI 会为该分类填充完整设定。</p></div>`;
   document.querySelector("#blueprint-content").innerHTML = `
     <section class="content-panel panel">
       <div class="content-head"><div><h2>${entry.title}</h2><p>${entry.description}</p></div><button class="secondary-button" type="button" data-toast="此处展示的是可编辑的原型结构；锁定字段需要作者显式解除后才能修改。">编辑设定</button></div>
       <div class="bp-entries">${cards}</div>
       <div class="living-banner"><b>状态更新边界：</b> Beat / Scene 只生成 proposed 候选；仅 Chapter Delta 经作者确认后更新 Living State，并作为下一章 Snapshot 的新增事实。</div>
     </section>`;
+  document.querySelectorAll(".blueprint-tab").forEach((tab) => {
+    const k = tab.dataset.blueprint;
+    if (k && k !== "living" && blueprintData[k]) {
+      const count = tab.querySelector("span");
+      if (count) count.textContent = String((blueprintData[k].entries || []).length);
+    }
+  });
   document.querySelectorAll(".blueprint-tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.blueprint === kind));
 }
 
