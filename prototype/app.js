@@ -440,7 +440,14 @@ function applyConceptPayload(payload) {
   const theme = document.querySelector("#concept-theme");
   if (theme && payload.theme !== undefined) theme.textContent = payload.theme;
   const list = document.querySelector("#concept-selling-points");
-  if (list && Array.isArray(payload.selling_points)) list.innerHTML = payload.selling_points.map((item) => `<li>${item}</li>`).join("");
+  if (list) {
+    const items = Array.isArray(payload.selling_points)
+      ? payload.selling_points.map((item) => String(item).trim()).filter(Boolean)
+      : typeof payload.selling_points === "string"
+        ? payload.selling_points.split(/[；;\n]/).map((item) => item.trim()).filter(Boolean)
+        : [];
+    list.innerHTML = items.length ? items.map((item) => `<li>${item}</li>`).join("") : `<li class="placeholder">（等待 AI 生成卖点）</li>`;
+  }
 }
 
 async function loadConceptForCurrentStory() {
@@ -929,6 +936,8 @@ function bindEvents() {
   document.querySelector("#generate-concept").addEventListener("click", async () => {
     const book = currentBook();
     if (apiAvailable && book) {
+      if (!book.idea || !book.idea.trim()) { toast("请先写下创作意图，再生成概念。"); return; }
+      await flushIdeaSave(book);
       showThinking("正在生成 Story Concept…", "AI 正在根据你的创意构建概念候选");
       try {
         const result = await apiRequest(`/stories/${book.id}/generations`, { method: "POST", body: JSON.stringify({ action: "generate_concept" }) });
@@ -947,7 +956,8 @@ function bindEvents() {
   });
   document.querySelector("#confirm-concept").addEventListener("click", async () => {
     const book = currentBook();
-    if (apiAvailable && book && window.currentConceptVersion) {
+    if (apiAvailable && book) {
+      if (!window.currentConceptVersion) { toast("请先点击「AI生成概念」，生成候选后再确认。"); return; }
       showThinking("正在确认 Concept…", "保存候选并推进到蓝图阶段");
       try {
         await saveConceptCandidate();

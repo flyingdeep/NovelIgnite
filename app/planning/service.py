@@ -45,14 +45,19 @@ def get_chapter(db: Session, story_id: str, chapter_id: str) -> Chapter:
     return chapter
 
 
-def fallback_chapters() -> list[dict[str, Any]]:
+def fallback_chapters(idea: str = "") -> list[dict[str, Any]]:
+    """Deterministic placeholder plan derived from the author's idea.
+
+    Never hard-codes demo story content; used only when no model adapter is available.
+    """
+    seed = (idea or "根据作者创意展开").strip()[:60]
     return [
-        {"title": "消失的委托人", "goal": "接受委托，发现三年记忆缺口是人为造成。", "summary": "林墨收到匿名委托与异常样本，回到档案室寻找事故记录。", "main_characters": ["林墨"], "arc_role": "建立身份谜题"},
-        {"title": "拍卖目录", "goal": "进入地下市场，找到与自己有关的记忆样本。", "summary": "林墨根据邀请函潜入地下拍卖会，发现拍卖目录中的样本编号属于自己。", "main_characters": ["林墨", "乔岚"], "arc_role": "推进身份谜题"},
-        {"title": "记忆样本", "goal": "验证样本来源，确认记忆缺口的异常性质。", "summary": "样本中的细节与林墨的专业记忆冲突，迫使他重新审视事故。", "main_characters": ["林墨", "乔岚"], "arc_role": "首次反转"},
-        {"title": "监管者来信", "goal": "让官方势力介入并提高调查风险。", "summary": "沈砚发来警告，要求林墨停止调查三年前事故。", "main_characters": ["林墨", "沈砚"], "arc_role": "扩大冲突"},
-        {"title": "损坏的证词", "goal": "从衰减记忆中拼合事故前夜的片段。", "summary": "林墨发现被损坏的证词仍保留一个不该存在的时间标记。", "main_characters": ["林墨"], "arc_role": "揭示伏笔"},
-        {"title": "双重委托", "goal": "暴露乔岚的隐瞒，制造核心关系危机。", "summary": "乔岚承认自己接受了另一份委托，林墨必须决定是否继续合作。", "main_characters": ["林墨", "乔岚"], "arc_role": "关系反转"},
+        {"title": "开端", "goal": "建立主角与核心冲突的入口。", "summary": f"基于「{seed}」展开故事起点，引入主角处境与第一层矛盾。", "main_characters": [], "arc_role": "建立主线"},
+        {"title": "展开", "goal": "推动主角迈出第一步。", "summary": "主角尝试解决问题，遭遇第一次阻力并获取关键线索。", "main_characters": [], "arc_role": "推进主线"},
+        {"title": "转折", "goal": "揭示隐藏真相的一角。", "summary": "一次意外使主角重新评估目标，冲突升级。", "main_characters": [], "arc_role": "首次反转"},
+        {"title": "深入", "goal": "扩大冲突范围。", "summary": "主角深入核心矛盾，关键人物立场发生变化。", "main_characters": [], "arc_role": "扩大冲突"},
+        {"title": "危机", "goal": "将主角逼到抉择点。", "summary": "代价逐渐显现，主角必须做出重要选择。", "main_characters": [], "arc_role": "揭示伏笔"},
+        {"title": "收束", "goal": "解决主线并留下回响。", "summary": "主角面对最终矛盾，完成主线并回应主题。", "main_characters": [], "arc_role": "收束"},
     ]
 
 
@@ -74,7 +79,7 @@ def generate_chapter_plan(db: Session, story_id: str, request: ChapterPlanGenera
         if adapter:
             payload = extract_json(adapter.complete(messages, temperature=config.temperature, reasoning_strength=config.reasoning_strength, json_mode=True, max_tokens=8192))
         else:
-            payload = fallback_chapters()
+            payload = fallback_chapters(story.idea_text)
         if not isinstance(payload, list) or not payload:
             raise ValueError("Chapter Plan response must be a non-empty array")
         old = list(db.scalars(select(Chapter).where(Chapter.story_id == story.id)))

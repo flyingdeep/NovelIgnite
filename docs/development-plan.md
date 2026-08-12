@@ -71,10 +71,12 @@
 - [x] AI 生成设置：`PUT /api/v1/stories/{id}/ai-config`（model/temperature/reasoning_strength），`GET` 读取当前配置。
 - [x] 前端接入：创意页 API 读写、概念页候选展示与确认、生成设置弹窗对接 API。
 - [x] 书名自动生成：未命名作品确认 Concept 后自动生成书名（`generate_title` 任务，失败降级保留原名）；`PUT /api/v1/stories/{id}/title` 支持作者随时改名（乐观锁）。
+- [x] 输入链消毒：移除前端 idea/概念页静态演示预填；Concept 生成服务对 `selling_points` 等字段做输出规范化（字符串→数组）；章节 fallback 改为基于创意的通用占位（不再硬编码示例故事）；生成/确认前前置校验。
 
 ### Phase 2 验收
 - Idea 保存 409 锁定后不可写；Concept 候选不自动应用；Lock 字段不被生成覆写；生成设置保存后影响后续任务快照。
 - 未命名作品确认 Concept 后书名由 AI 生成且可改；已命名作品不被自动覆盖；改名版本冲突返回 409。
+- 演示/示例内容绝不进入模型输入链；模型输出字段结构不匹配时由服务端规范化，前端不残留静态候选。
 
 ---
 
@@ -158,3 +160,4 @@ Blueprint 验收：Concept 未确认时生成返回 409；四类 Baseline 候选
 - 2026-08-12：完成 Phase 3：Blueprint 四分类 Baseline 工件、候选生成/编辑/Lock/确认 API；确认后自动创建 Living State 初始投影；原型蓝图页接入真实读取/生成/确认；9 项测试通过，真实 API Concept → Blueprint 成功返回 4 个分类工件。
 - 2026-08-12：完成 Phase 4：新增 `chapters` 表、Chapter Plan 生成服务与逐章激活规则；首章 `fixed + active`、后续 `outline + locked`；原型章节页接入真实列表/生成 API；10 项测试通过，锁定章节编辑返回 409，README 已同步当前真实范围。
 - 2026-08-12：概念确认后自动生成书名：未命名作品确认 Concept 时由配置模型生成标题（`generate_title` 任务，失败降级保留原名，已命名作品不覆盖）；新增 `PUT /api/v1/stories/{id}/title` 支持作者随时改名并同步顶部与作品库；原型顶部书名增加 ✎ 编辑入口。13 项 pytest 通过；真实模型「橘猫治愈系」概念确认后生成《听心猫》，改名《听心猫与失语少年》后作品库同步。
+- 2026-08-12：定位并修复「模型持续输出林墨演示设定」的根因——污染来自前端静态演示预填，而非模型。真实链路：概念页静态表单预填林墨卖点 → LLM 输出的 `selling_points` 为字符串（非数组）→ 前端 `Array.isArray` 判断跳过覆盖 → 静态林墨卖点残留 → 确认时作为作者内容保存。修复：① 清除 idea/概念页静态演示预填；② 概念服务对输出做 `_normalize_concept_payload`（selling_points 字符串→数组）并强化 prompt 约束；③ 章节 fallback 改为基于创意的通用占位；④ 前端 `applyConceptPayload` 兼容字符串卖点并总是覆盖/清空；⑤ 生成/确认前置校验（idea 非空、确认前需先生成）。另修复生成前 idea 防抖未落库导致 422 的竞态。存量数据核查无污染；15 项 pytest 通过；浏览器实测橘猫概念卖点为 5 条干净数组。

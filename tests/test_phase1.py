@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -209,3 +210,26 @@ def test_title_update_and_version_conflict(client):
     assert updated.json()["version"] == created["version"] + 1
     conflict = client.put(f"/api/v1/stories/{story_id}/title", json={"title": "再改", "expected_version": created["version"]})
     assert conflict.status_code == 409
+
+
+def test_concept_selling_points_normalized_to_list(client, monkeypatch):
+    raw = '{"genre":"悬疑","summary":"测试梗概","selling_points":"卖点一；卖点二\\n卖点三"}'
+    monkeypatch.setattr("app.works.concept_service.build_adapters", lambda: {"deepseek": FakeModelAdapter(raw)})
+    created = client.post("/api/v1/works", json={}).json()
+    story_id = created["id"]
+    client.put(f"/api/v1/stories/{story_id}/idea", json={"idea_text": "测试创意", "expected_version": created["version"]})
+    generated = client.post(f"/api/v1/stories/{story_id}/generations", json={"action": "generate_concept"})
+    assert generated.status_code == 200
+    selling = generated.json()["artifact"]["payload"]["selling_points"]
+    assert isinstance(selling, list)
+    assert selling == ["卖点一", "卖点二", "卖点三"]
+
+
+def test_chapter_fallback_has_no_demo_content():
+    from app.planning.service import fallback_chapters
+    chapters = fallback_chapters("一个老木匠在沙漠里雕刻钟")
+    assert len(chapters) == 6
+    blob = json.dumps(chapters, ensure_ascii=False)
+    for banned in ("林墨", "监管局", "拍卖", "沈砚", "鉴定"):
+        assert banned not in blob
+    assert "老木匠" in blob or "沙漠" in blob

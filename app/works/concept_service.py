@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -55,6 +56,22 @@ def _model_for_config(model_name: str | None) -> ModelSpec:
     return next(spec for spec in specs if spec.name == "DeepSeek V4 Flash")
 
 
+def _normalize_concept_payload(payload: Any) -> dict[str, Any]:
+    """Normalize LLM concept output so the stored artifact always has a stable shape.
+
+    Guards against model output drift (e.g. selling_points as a semicolon-separated
+    string instead of a list) that could otherwise leak stale front-end demo data.
+    """
+    if not isinstance(payload, dict):
+        payload = _fallback_concept("")
+    selling = payload.get("selling_points")
+    if isinstance(selling, str):
+        payload["selling_points"] = [part.strip() for part in re.split(r"[；;\n]", selling) if part.strip()]
+    if not isinstance(payload.get("selling_points"), list):
+        payload["selling_points"] = []
+    return payload
+
+
 def _fallback_concept(idea: str) -> dict[str, Any]:
     return {
         "genre": "待作者确定",
@@ -85,7 +102,7 @@ def generate_concept(db: Session, story_id: str, request: ConceptGenerationReque
     db.add(task)
     db.flush()
     messages = [
-        {"role": "system", "content": "你是小说策划助手。只返回合法 JSON，不要 markdown。字段必须包含 genre, style, length, viewpoint, summary, theme, conflict, selling_points。"},
+        {"role": "system", "content": "你是小说策划助手。只返回合法 JSON，不要 markdown。字段必须包含 genre, style, length, viewpoint, summary, theme, conflict, selling_points（selling_points 必须是字符串数组，每项一句独立卖点）。严格依据作者创意展开，不得引入任何示例人物、既有故事设定或提示词之外的内容。"},
         {"role": "user", "content": f"请根据作者创意生成 Story Concept 候选。保留作者意图，不要把未确认内容当事实。作者创意：{story.idea_text}"},
     ]
     try:
@@ -96,7 +113,7 @@ def generate_concept(db: Session, story_id: str, request: ConceptGenerationReque
         else:
             raw = adapter.complete(messages, temperature=config.temperature, reasoning_strength=config.reasoning_strength, json_mode=True)
             from app.infrastructure.model_adapter import extract_json
-            payload = extract_json(raw)
+            payload = _normalize_concept_payload(extract_json(raw))
         previous = latest_concept(db, story.id)
         artifact = StoryArtifact(
             story_id=story.id,
