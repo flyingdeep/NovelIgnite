@@ -1131,7 +1131,7 @@ function bindEvents() {
 function renderModels() {
   const models = [
     ["DeepSeek V4 Flash", "OpenAI Chat Completions compatible · 适合快速结构化规划与正文生成", "https://api.deepseek.com", "运行正常 · 842ms"],
-    ["Agnes 2.0 Flash", "OpenAI Chat Completions compatible · 适合结构化候选与一致性检查", "https://apihub.agnes-ai.com", "运行正常 · 713ms"],
+    ["Agnes 2.5 Flash", "OpenAI Chat Completions compatible · 适合结构化候选与一致性检查", "https://apihub.agnes-ai.com", "运行正常 · 713ms"],
     ["Grok 4.5", "OpenAI Chat Completions compatible · 用于高探索性候选；不要求结构化响应格式", "https://modelflare.dev", "尚未测试"]
   ];
   document.querySelector("#model-cards").innerHTML = models.map(([name, description, endpoint, status], index) => `<article class="model-card"><div><h3>${name} <span class="tag green">已启用</span></h3><p>${description}</p><small>${endpoint} · API Key: 服务端环境变量</small></div><div class="model-card-actions"><button class="secondary-button test-model" type="button" data-model="${name}" data-index="${index}">测试配置</button><button class="icon-button" type="button" aria-label="编辑 ${name}" data-toast="真实实现应编辑服务端模型配置，前端仅显示脱敏状态。">⚙</button></div><div class="test-result" data-result="${index}" ${index === 2 ? "hidden" : ""}>✓ ${status} · 返回结构化候选验证通过</div></article>`).join("");

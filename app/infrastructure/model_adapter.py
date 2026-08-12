@@ -17,12 +17,17 @@ class ModelSpec:
     base_url: str
     api_key_env: str
     supports_json: bool
+    # 推理/思考参数如何传递（依据各模型官方文档）：
+    #   "deepseek": extra_body.thinking={type:enabled} + 顶层 reasoning_effort(low/high/max)；medium 映射为 high
+    #   "agnes":    extra_body.chat_template_kwargs={enable_thinking: true/false}
+    #   "grok":     顶层 reasoning_effort(low/medium/high)，推理无法关闭
+    thinking: str = "builtin"
 
 
 MODEL_SPECS = (
-    ModelSpec("agnes", "Agnes 2.0 Flash", "agnes-2.0-flash", "https://apihub.agnes-ai.com/v1", "AGNES_API_KEY", True),
-    ModelSpec("deepseek", "DeepSeek V4 Flash", "deepseek-v4-flash", "https://api.deepseek.com/v1", "DEEPSEEK_API_KEY", True),
-    ModelSpec("grok", "Grok 4.5", "grok-4.5", "https://modelflare.dev/v1", "GROK_API_KEY", False),
+    ModelSpec("agnes", "Agnes 2.5 Flash", "agnes-2.5-flash", "https://apihub.agnes-ai.com/v1", "AGNES_API_KEY", True, "agnes"),
+    ModelSpec("deepseek", "DeepSeek V4 Flash", "deepseek-v4-flash", "https://api.deepseek.com/v1", "DEEPSEEK_API_KEY", True, "deepseek"),
+    ModelSpec("grok", "Grok 4.5", "grok-4.5", "https://modelflare.dev/v1", "GROK_API_KEY", False, "grok"),
 )
 
 
@@ -61,8 +66,19 @@ class OpenAICompatibleAdapter:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
-        if reasoning_strength in {"low", "medium", "high"}:
-            kwargs["extra_body"] = {"reasoning_effort": reasoning_strength}
+        extra_body: dict[str, Any] = {}
+        if self.spec.thinking == "deepseek":
+            # DeepSeek 思考模式默认开启；显式开启并按官方映射表映射强度（low→low，medium/high→high，max→max）
+            extra_body["thinking"] = {"type": "enabled"}
+            kwargs["reasoning_effort"] = {"low": "low", "medium": "high", "high": "high"}.get(reasoning_strength, "high")
+        elif self.spec.thinking == "agnes":
+            # Agnes 2.5 Flash：通过 chat_template_kwargs.enable_thinking 开启思考；low 视为关闭思考
+            extra_body["chat_template_kwargs"] = {"enable_thinking": reasoning_strength != "low"}
+        elif self.spec.thinking == "grok":
+            # Grok 4.5：推理无法关闭，reasoning_effort 为顶层参数（low/medium/high）
+            kwargs["reasoning_effort"] = reasoning_strength
+        if extra_body:
+            kwargs["extra_body"] = extra_body
         if json_mode and self.spec.supports_json:
             kwargs["response_format"] = {"type": "json_object"}
         response = client.chat.completions.create(**kwargs)

@@ -52,9 +52,11 @@ py -3.13 -m uvicorn app.main:app --reload
 
 | 提供方 | Base URL | 默认模型 | 环境变量 | JSON 说明 |
 |---|---|---|---|---|
-| Agnes | `https://apihub.agnes-ai.com/v1` | `agnes-2.0-flash` | `AGNES_API_KEY` | 支持 `response_format` |
-| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-v4-flash` | `DEEPSEEK_API_KEY` | 可尝试 JSON 模式 |
-| Grok | `https://modelflare.dev/v1` | `grok-4.5` | `GROK_API_KEY` | 不发送 `response_format`，自动容错解析 |
+| Agnes | `https://apihub.agnes-ai.com/v1` | `agnes-2.5-flash` | `AGNES_API_KEY` | 支持 `response_format`；思考模式经 `chat_template_kwargs.enable_thinking` 开启 |
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-v4-flash` | `DEEPSEEK_API_KEY` | 可尝试 JSON 模式；思考模式默认开启，`extra_body.thinking` + 顶层 `reasoning_effort` |
+| Grok | `https://modelflare.dev/v1` | `grok-4.5` | `GROK_API_KEY` | 不发送 `response_format`，自动容错解析；推理内置，顶层 `reasoning_effort` |
+
+- 推理强度（low/medium/high）按各模型官方文档传递：DeepSeek 顶层 `reasoning_effort`（medium 映射 high）、Agnes `chat_template_kwargs.enable_thinking`、Grok 顶层 `reasoning_effort`。
 
 - `.env` 只在服务端读取，不能提交到 Git。
 - 模型、Temperature 和推理强度可以通过作品级 AI 配置保存。

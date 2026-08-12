@@ -6,9 +6,23 @@
 
 | 模型 | `base_url` | `model` | API Key 环境变量 | 备注 |
 |---|---|---|---|---|
-| Agnes | `https://apihub.agnes-ai.com/v1` | `agnes-2.0-flash` | `AGNES_API_KEY` | OpenAI 兼容；支持 `reasoning_effort` |
-| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-v4-flash` | `DEEPSEEK_API_KEY` | OpenAI 兼容；当前关闭 thinking；使用 JSON 时按兼容性处理 |
-| Grok | `https://modelflare.dev/v1` | `grok-4.5` | `GROK_API_KEY` | OpenAI 兼容；当前不发送 `response_format`，支持 `reasoning_effort` |
+| Agnes | `https://apihub.agnes-ai.com/v1` | `agnes-2.5-flash` | `AGNES_API_KEY` | OpenAI 兼容；思考模式经 `chat_template_kwargs.enable_thinking` 开启；`agnes-2.0-flash` 仍可作为兼容回退 |
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-v4-flash` | `DEEPSEEK_API_KEY` | OpenAI 兼容；思考模式默认开启，需 `extra_body.thinking={type:enabled}` + 顶层 `reasoning_effort`；思考模式下 `temperature` 不生效 |
+| Grok | `https://modelflare.dev/v1` | `grok-4.5` | `GROK_API_KEY` | OpenAI 兼容；推理无法关闭（默认 high），顶层 `reasoning_effort`(low/medium/high)；不发送 `response_format` |
+
+## 思考 / 推理模式
+
+| 模型 | 开启方式 | 强度参数 |
+|---|---|---|
+| DeepSeek | `extra_body: {"thinking": {"type": "enabled"}}`（文档说明默认已开启，仍显式开启） | 顶层 `reasoning_effort`: low/high/max；映射 low→low、medium→high、high→high |
+| Agnes 2.5 | `extra_body: {"chat_template_kwargs": {"enable_thinking": true}}` | 无强度档位（`low` 可传 false 关闭）；Anthropic 兼容格式支持 `budget_tokens` |
+| Grok | 推理内置，无法关闭 | 顶层 `reasoning_effort`: low/medium/high，默认 high |
+
+说明：
+
+- DeepSeek 思考模式下 `temperature`/`top_p`/`presence_penalty`/`frequency_penalty` 不生效（设置不报错）。
+- 思维链通过响应 `reasoning_content` 返回；本项目为一次性生成任务，不参与多轮拼接。
+- `reasoning_effort` 对 DeepSeek/Grok 是**顶层参数**，不要放进 `extra_body`；Agnes 不用 `reasoning_effort`。
 
 ## 最小调用形式
 

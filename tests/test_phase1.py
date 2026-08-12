@@ -58,20 +58,7 @@ def test_ai_config_validation_and_version(client):
     assert client.put(f"/api/v1/stories/{work['id']}/ai-config", json={"model": "Grok 4.5", "temperature": 2, "reasoning_strength": "high", "expected_version": 2}).status_code == 422
 
 
-def test_models_endpoint_has_three_specs(client):
-    models = client.get("/api/v1/models").json()
-    assert {model["provider"] for model in models} == {"agnes", "deepseek", "grok"}
-    assert next(model for model in models if model["provider"] == "grok")["supports_json"] is False
-
-
-def test_extract_json_handles_code_fence_and_wrapping():
-    assert extract_json('```json\n{"ok": true}\n```')["ok"] is True
-    assert extract_json('result: {"count": 2}') == {"count": 2}
-
-
-def test_grok_adapter_does_not_send_response_format(monkeypatch):
-    spec = ModelSpec("grok", "Grok 4.5", "grok-4.5", "https://modelflare.dev/v1", "GROK_API_KEY", False)
-    adapter = OpenAICompatibleAdapter(spec)
+def _capture_adapter_kwargs(monkeypatch, spec, **complete_kwargs):
     captured = {}
 
     class FakeCompletions:
@@ -83,10 +70,58 @@ def test_grok_adapter_does_not_send_response_format(monkeypatch):
         def __init__(self, **kwargs):
             self.chat = type("Chat", (), {"completions": FakeCompletions()})()
 
-    monkeypatch.setenv("GROK_API_KEY", "test")
+    monkeypatch.setenv(spec.api_key_env, "test")
     monkeypatch.setattr("openai.OpenAI", FakeClient)
-    assert adapter.complete([{"role": "user", "content": "hi"}], json_mode=True) == "ok"
+    OpenAICompatibleAdapter(spec).complete([{"role": "user", "content": "hi"}], **complete_kwargs)
+    return captured
+
+
+def test_models_endpoint_has_three_specs(client):
+    models = client.get("/api/v1/models").json()
+    assert {model["provider"] for model in models} == {"agnes", "deepseek", "grok"}
+    assert next(model for model in models if model["provider"] == "grok")["supports_json"] is False
+
+
+def test_extract_json_handles_code_fence_and_wrapping():
+    assert extract_json('```json\n{"ok": true}\n```')["ok"] is True
+    assert extract_json('result: {"count": 2}') == {"count": 2}
+
+
+def test_agnes_spec_upgraded_to_25():
+    from app.infrastructure.model_adapter import MODEL_SPECS
+
+    agnes = next(spec for spec in MODEL_SPECS if spec.provider == "agnes")
+    assert agnes.model == "agnes-2.5-flash"
+    assert agnes.name == "Agnes 2.5 Flash"
+
+
+def test_deepseek_thinking_params(monkeypatch):
+    from app.infrastructure.model_adapter import MODEL_SPECS
+
+    spec = next(s for s in MODEL_SPECS if s.provider == "deepseek")
+    captured = _capture_adapter_kwargs(monkeypatch, spec, reasoning_strength="medium")
+    assert captured["extra_body"]["thinking"] == {"type": "enabled"}
+    assert captured["reasoning_effort"] == "high"  # 官方映射表：medium -> high
+    captured_low = _capture_adapter_kwargs(monkeypatch, spec, reasoning_strength="low")
+    assert captured_low["reasoning_effort"] == "low"
+
+
+def test_agnes_thinking_params(monkeypatch):
+    from app.infrastructure.model_adapter import MODEL_SPECS
+
+    spec = next(s for s in MODEL_SPECS if s.provider == "agnes")
+    captured = _capture_adapter_kwargs(monkeypatch, spec, reasoning_strength="high")
+    assert captured["extra_body"]["chat_template_kwargs"] == {"enable_thinking": True}
+    captured_low = _capture_adapter_kwargs(monkeypatch, spec, reasoning_strength="low")
+    assert captured_low["extra_body"]["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_grok_adapter_does_not_send_response_format(monkeypatch):
+    spec = ModelSpec("grok", "Grok 4.5", "grok-4.5", "https://modelflare.dev/v1", "GROK_API_KEY", False, "grok")
+    captured = _capture_adapter_kwargs(monkeypatch, spec, json_mode=True, reasoning_strength="medium")
     assert "response_format" not in captured
+    assert captured["reasoning_effort"] == "medium"  # 顶层参数
+    assert "extra_body" not in captured
 
 
 def test_fake_adapter_is_deterministic_and_records_parameters():
