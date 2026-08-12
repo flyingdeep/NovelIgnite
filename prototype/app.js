@@ -381,6 +381,7 @@ let pendingDeleteId = null;
 let generatedBeat = false;
 let toastTimer;
 let aiConfig = { model: "DeepSeek V4 Flash", temperature: 0.7, reasoning: "medium", version: 1 };
+let blueprintHasData = false;
 const API_BASE = "/api/v1";
 let apiAvailable = false;
 
@@ -479,12 +480,16 @@ async function loadBlueprintForCurrentStory() {
   if (!apiAvailable || !book) return;
   try {
     const data = await apiRequest(`/stories/${book.id}/blueprint`);
-    Object.entries(data).forEach(([kind, artifact]) => { if (artifact && blueprintData[kind]) blueprintPayloadToUi(kind, artifact); });
+    const hasAny = ["characters", "world", "timeline", "arc"].some((kind) => data[kind]);
+    blueprintHasData = hasAny;
     window.currentBlueprintVersions = {};
-    ["characters", "world", "timeline", "arc"].forEach((kind) => { if (data[kind]) window.currentBlueprintVersions[kind] = data[kind].version; });
+    if (hasAny) {
+      Object.entries(data).forEach(([kind, artifact]) => { if (artifact && blueprintData[kind]) blueprintPayloadToUi(kind, artifact); });
+      ["characters", "world", "timeline", "arc"].forEach((kind) => { if (data[kind]) window.currentBlueprintVersions[kind] = data[kind].version; });
+    }
     const confirmed = ["characters", "world", "timeline", "arc"].every((kind) => data[kind]?.status === "confirmed");
     document.querySelector("#confirm-blueprint").style.display = confirmed ? "none" : "";
-    document.querySelector("#blueprint-stage-note").textContent = confirmed ? "已确认 · 当前版本为权威 Blueprint" : "AI 候选 · 尚未确认";
+    document.querySelector("#blueprint-stage-note").textContent = confirmed ? "已确认 · 当前版本为权威 Blueprint" : (hasAny ? "AI 候选 · 尚未确认" : "尚未生成");
     renderBlueprint(document.querySelector(".blueprint-tab.active")?.dataset.blueprint || "characters");
   } catch (error) {
     window.currentBlueprintVersions = {};
@@ -523,7 +528,20 @@ function showScreen(id) {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
+function renderBlueprintEmpty() {
+  document.querySelector("#blueprint-content").innerHTML = `
+    <section class="content-panel panel">
+      <div class="content-head"><div><h2>故事蓝图</h2><p>该作品尚未生成蓝图。不同概念会得到完全不同的四类全局设定。</p></div></div>
+      <div class="books-empty"><h3>尚未生成蓝图</h3><p>请确认 Concept 后，点击右上角「生成候选」，AI 将根据当前概念生成 Characters / World / Timeline / Arc。</p></div>
+    </section>`;
+}
+
 function renderBlueprint(kind = "characters") {
+  document.querySelectorAll(".blueprint-tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.blueprint === kind));
+  if (!blueprintHasData && currentBook()) {
+    renderBlueprintEmpty();
+    return;
+  }
   const entry = blueprintData[kind];
   const cards = entry.entries.map((item, index) => `
     <article class="bp-entry">
@@ -681,6 +699,17 @@ function renderChapters() {
     </article>`).join("");
 }
 
+function renderChaptersEmpty() {
+  document.querySelector("#chapter-grid").innerHTML = `<div class="books-empty" style="grid-column:1/-1"><h3>尚未生成章节雏形</h3><p>确认 Blueprint 后，点击右上角「生成章节雏形」，AI 将根据蓝图生成章节卡片并只激活第 1 章。</p></div>`;
+  const summary = document.querySelector(".chapter-summary");
+  if (summary) {
+    const first = summary.firstElementChild;
+    if (first) first.innerHTML = `<b>0 章</b><span>·</span>尚未生成章节计划`;
+    const groups = summary.querySelectorAll("div");
+    if (groups[1]) groups[1].innerHTML = `<span class="tag blue">等待生成</span><span class="tag">生成后第 1 章激活</span>`;
+  }
+}
+
 async function loadChaptersForCurrentStory() {
   const book = currentBook();
   if (!apiAvailable || !book) return;
@@ -690,11 +719,14 @@ async function loadChaptersForCurrentStory() {
       window.currentChapters = response;
       renderChaptersFromApi(response);
     } else {
+      window.currentChapters = [];
       const note = document.querySelector("#chapter-plan-note");
       if (note) note.textContent = book.stage === "blueprint_confirmed" || book.stage === "chapter_planning" ? "蓝图已确认 · 可生成章节雏形" : "等待蓝图确认";
+      renderChaptersEmpty();
     }
   } catch (error) {
     window.currentChapters = [];
+    renderChaptersEmpty();
   }
 }
 
@@ -893,6 +925,7 @@ function bindEvents() {
       try {
         const result = await apiRequest(`/stories/${book.id}/blueprint/generations`, { method: "POST", body: JSON.stringify({ action: "generate_blueprint" }) });
         result.artifacts.forEach((artifact) => { if (blueprintData[artifact.kind]) blueprintPayloadToUi(artifact.kind, artifact); });
+        blueprintHasData = true;
         window.currentBlueprintVersions = Object.fromEntries(result.artifacts.map((artifact) => [artifact.kind, artifact.version]));
         document.querySelector("#blueprint-stage-note").textContent = "AI 候选 · 尚未确认";
         renderBlueprint("characters");
