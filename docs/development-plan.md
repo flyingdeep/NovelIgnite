@@ -70,9 +70,11 @@
 - [x] Concept 编辑、字段级 Lock、重新生成与确认。
 - [x] AI 生成设置：`PUT /api/v1/stories/{id}/ai-config`（model/temperature/reasoning_strength），`GET` 读取当前配置。
 - [x] 前端接入：创意页 API 读写、概念页候选展示与确认、生成设置弹窗对接 API。
+- [x] 书名自动生成：未命名作品确认 Concept 后自动生成书名（`generate_title` 任务，失败降级保留原名）；`PUT /api/v1/stories/{id}/title` 支持作者随时改名（乐观锁）。
 
 ### Phase 2 验收
 - Idea 保存 409 锁定后不可写；Concept 候选不自动应用；Lock 字段不被生成覆写；生成设置保存后影响后续任务快照。
+- 未命名作品确认 Concept 后书名由 AI 生成且可改；已命名作品不被自动覆盖；改名版本冲突返回 409。
 
 ---
 
@@ -155,3 +157,4 @@ Blueprint 验收：Concept 未确认时生成返回 409；四类 Baseline 候选
 - 2026-08-11：完成 Phase 2：新增 `story_artifacts`、`generation_tasks` 与 Concept 候选服务；实现 Idea 锁定、Concept 生成/编辑/确认、乐观锁、重复确认 409；原型创意/概念页接入真实 API；8 项测试通过，三模型真实 Concept 生成与浏览器确认路径成功。
 - 2026-08-12：完成 Phase 3：Blueprint 四分类 Baseline 工件、候选生成/编辑/Lock/确认 API；确认后自动创建 Living State 初始投影；原型蓝图页接入真实读取/生成/确认；9 项测试通过，真实 API Concept → Blueprint 成功返回 4 个分类工件。
 - 2026-08-12：完成 Phase 4：新增 `chapters` 表、Chapter Plan 生成服务与逐章激活规则；首章 `fixed + active`、后续 `outline + locked`；原型章节页接入真实列表/生成 API；10 项测试通过，锁定章节编辑返回 409，README 已同步当前真实范围。
+- 2026-08-12：概念确认后自动生成书名：未命名作品确认 Concept 时由配置模型生成标题（`generate_title` 任务，失败降级保留原名，已命名作品不覆盖）；新增 `PUT /api/v1/stories/{id}/title` 支持作者随时改名并同步顶部与作品库；原型顶部书名增加 ✎ 编辑入口。13 项 pytest 通过；真实模型「橘猫治愈系」概念确认后生成《听心猫》，改名《听心猫与失语少年》后作品库同步。

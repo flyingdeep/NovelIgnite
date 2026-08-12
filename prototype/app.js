@@ -565,6 +565,53 @@ function currentBook() {
   return books.find((book) => book.id === activeBook) || null;
 }
 
+async function refreshStoryTitle(book) {
+  try {
+    const work = await apiRequest(`/works/${book.id}`);
+    const oldTitle = book.title;
+    book.title = work.title;
+    book.version = work.version;
+    book.updated = work.updated_at ? new Date(work.updated_at).toLocaleString("zh-CN") : book.updated;
+    updateTopState();
+    return book.title !== oldTitle;
+  } catch (error) {
+    return false;
+  }
+}
+
+function openTitleModal() {
+  const book = currentBook();
+  if (!book) return;
+  document.querySelector("#title-input").value = book.title;
+  showModal("#title-modal");
+  document.querySelector("#title-input").focus();
+}
+
+async function saveTitle() {
+  const book = currentBook();
+  const title = document.querySelector("#title-input").value.trim();
+  if (!title) { toast("书名不能为空。"); return; }
+  if (!apiAvailable || !book) {
+    book.title = title;
+    hideModal("#title-modal");
+    updateTopState();
+    renderBooks();
+    toast(`书名已更新为《${title}》。`);
+    return;
+  }
+  try {
+    const work = await apiRequest(`/stories/${book.id}/title`, { method: "PUT", body: JSON.stringify({ title, expected_version: book.version || 1 }) });
+    book.title = work.title;
+    book.version = work.version;
+    hideModal("#title-modal");
+    updateTopState();
+    renderBooks();
+    toast(`书名已更新为《${book.title}》。`);
+  } catch (error) {
+    toast("保存失败：版本冲突或后端不可用，请刷新后重试。");
+  }
+}
+
 function updateTopState() {
   const crumb = document.querySelector("#crumb");
   const stepbar = document.querySelector("#stepbar");
@@ -575,7 +622,7 @@ function updateTopState() {
     stepbar.classList.add("library-only");
     return;
   }
-  crumb.innerHTML = `<strong>${book.title}</strong><span class="status-dot">${book.status === "completed" ? "已完成" : "进行中"}</span>`;
+  crumb.innerHTML = `<strong>${book.title}</strong><span class="status-dot">${book.status === "completed" ? "已完成" : "进行中"}</span><button class="title-edit" type="button" data-title-edit aria-label="修改书名">✎</button>`;
   stepbar.classList.remove("library-only");
 }
 
@@ -591,7 +638,7 @@ function renderBooks() {
         <span class="book-spine"></span>
         <span class="book-status ${book.status}">${book.status === "completed" ? "✓ 已完成" : "● 进行中"}</span>
         <span class="book-title">${book.title}</span>
-        <span class="book-subtitle">${book.subtitle}</span>
+        <span class="book-subtitle">${book.stage === "idea" ? "尚未分类 · 待生成" : "创作中 · 进行中"}</span>
       </button>
       <div class="book-meta">
         <h3>${book.title}</h3>
@@ -908,9 +955,10 @@ function bindEvents() {
         window.currentConceptVersion = confirmed.version;
         window.currentConceptStatus = "confirmed";
         book.stage = "concept_confirmed";
+        const renamed = await refreshStoryTitle(book);
         document.querySelector("#confirm-concept").style.display = "none";
         document.querySelector("#concept-stage-note").textContent = "已确认 · 当前版本为权威 Concept";
-        toast("Concept 已确认，正在进入蓝图。");
+        toast(renamed ? `Concept 已确认，AI 已生成书名《${book.title}》，可点击顶部书名修改。` : "Concept 已确认，正在进入蓝图。");
         showScreen("blueprint");
       } catch (error) { toast("Concept 确认失败，请检查版本是否已更新。"); }
       finally { hideThinking(); }
@@ -978,7 +1026,11 @@ function bindEvents() {
   modal.addEventListener("click", (event) => { if (event.target === modal) closeModal(); });
   document.addEventListener("click", (event) => {
     if (event.target.closest("[data-config]")) openConfig();
+    if (event.target.closest("[data-title-edit]")) openTitleModal();
   });
+  document.querySelector("#save-title").addEventListener("click", saveTitle);
+  document.querySelector("#title-input").addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); saveTitle(); } });
+  document.querySelectorAll("[data-close-title]").forEach((button) => button.addEventListener("click", () => hideModal("#title-modal")));
   document.querySelector("#config-temp").addEventListener("input", (event) => {
     document.querySelector("#config-temp-value").textContent = event.target.value;
   });

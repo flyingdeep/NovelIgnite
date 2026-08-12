@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.works.models import AIConfig, Story
-from app.works.schemas import AIConfigUpdate, IdeaUpdate, WorkCreate
+from app.works.schemas import AIConfigUpdate, IdeaUpdate, TitleUpdate, WorkCreate
 
 
 def list_stories(db: Session) -> list[Story]:
@@ -44,6 +44,17 @@ def update_idea(db: Session, story_id: str, data: IdeaUpdate) -> Story:
     if story.version != data.expected_version:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Story version conflict")
     story.idea_text = data.idea_text
+    story.version += 1
+    db.commit()
+    db.refresh(story)
+    return story
+
+
+def update_title(db: Session, story_id: str, data: TitleUpdate) -> Story:
+    story = get_story_or_404(db, story_id)
+    if story.version != data.expected_version:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Story version conflict")
+    story.title = data.title.strip() or "未命名故事"
     story.version += 1
     db.commit()
     db.refresh(story)

@@ -26,6 +26,11 @@ class IdeaUpdate(BaseModel):
     expected_version: int = Field(ge=1)
 
 
+class TitleUpdate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    expected_version: int = Field(ge=1)
+
+
 class AIConfigUpdate(BaseModel):
     model: str = Field(min_length=1, max_length=100)
     temperature: float = Field(ge=0, le=1.5)

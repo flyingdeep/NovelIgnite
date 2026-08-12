@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session
 from app.infrastructure.database import get_db
 from app.infrastructure.config import settings
 from app.infrastructure.model_adapter import configured_model_specs
-from app.works.schemas import AIConfigResponse, AIConfigUpdate, IdeaUpdate, ModelResponse, WorkCreate, WorkResponse
-from app.works.service import create_story, get_ai_config, get_story_or_404, list_stories, soft_delete_story, update_ai_config, update_idea
+from app.works.schemas import AIConfigResponse, AIConfigUpdate, IdeaUpdate, ModelResponse, TitleUpdate, WorkCreate, WorkResponse
+from app.works.service import create_story, get_ai_config, get_story_or_404, list_stories, soft_delete_story, update_ai_config, update_idea, update_title
 from app.works.concept_schemas import ConceptConfirm, ConceptGenerationRequest, ConceptUpdate
 from app.works.concept_service import confirm_concept, concept_response, generate_concept, latest_concept, update_concept
 from app.works.blueprint_schemas import BlueprintConfirm, BlueprintGenerationRequest, BlueprintUpdate, artifact_response
@@ -49,6 +49,11 @@ def delete_work(story_id: str, response: Response, db: Session = Depends(get_db)
 @router.put("/stories/{story_id}/idea", response_model=WorkResponse)
 def put_idea(story_id: str, payload: IdeaUpdate, db: Session = Depends(get_db)):
     return update_idea(db, story_id, payload)
+
+
+@router.put("/stories/{story_id}/title", response_model=WorkResponse)
+def put_story_title(story_id: str, payload: TitleUpdate, db: Session = Depends(get_db)):
+    return update_title(db, story_id, payload)
 
 
 @router.get("/stories/{story_id}/ai-config", response_model=AIConfigResponse)

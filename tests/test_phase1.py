@@ -165,3 +165,47 @@ def test_chapter_plan_activation_and_locked_access(client, monkeypatch):
     assert chapters[0]["access_status"] == "active"
     assert all(chapter["access_status"] == "locked" for chapter in chapters[1:])
     assert client.put(f"/api/v1/stories/{story_id}/chapters/{chapters[1]['id']}/plan", json={"summary": "禁止修改", "expected_version": chapters[1]["version"]}).status_code == 409
+
+
+TITLE_CONCEPT_JSON = '{"genre":"悬疑","style":"冷静","length":"中篇","viewpoint":"第三人称","summary":"测试梗概","theme":"测试主题","conflict":"测试冲突","selling_points":["点1"],"title":"暗涌之城"}'
+
+
+def test_title_auto_generated_on_concept_confirm(client, monkeypatch):
+    fake = FakeModelAdapter(TITLE_CONCEPT_JSON)
+    monkeypatch.setattr("app.works.concept_service.build_adapters", lambda: {"deepseek": fake})
+    created = client.post("/api/v1/works", json={}).json()
+    assert created["title"] == "未命名故事"
+    story_id = created["id"]
+    client.put(f"/api/v1/stories/{story_id}/idea", json={"idea_text": "测试创意", "expected_version": created["version"]})
+    generated = client.post(f"/api/v1/stories/{story_id}/generations", json={"action": "generate_concept"})
+    assert generated.status_code == 200
+    candidate = generated.json()["artifact"]
+    confirmed = client.post(f"/api/v1/stories/{story_id}/concept/confirm", json={"expected_version": candidate["version"]})
+    assert confirmed.status_code == 200
+    work = client.get(f"/api/v1/works/{story_id}").json()
+    assert work["title"] == "暗涌之城"
+    assert work["stage"] == "concept_confirmed"
+
+
+def test_title_not_overwritten_when_already_named(client, monkeypatch):
+    fake = FakeModelAdapter(TITLE_CONCEPT_JSON)
+    monkeypatch.setattr("app.works.concept_service.build_adapters", lambda: {"deepseek": fake})
+    created = client.post("/api/v1/works", json={"title": "作者自定书名"}).json()
+    story_id = created["id"]
+    client.put(f"/api/v1/stories/{story_id}/idea", json={"idea_text": "测试创意", "expected_version": created["version"]})
+    generated = client.post(f"/api/v1/stories/{story_id}/generations", json={"action": "generate_concept"})
+    candidate = generated.json()["artifact"]
+    confirmed = client.post(f"/api/v1/stories/{story_id}/concept/confirm", json={"expected_version": candidate["version"]})
+    assert confirmed.status_code == 200
+    assert client.get(f"/api/v1/works/{story_id}").json()["title"] == "作者自定书名"
+
+
+def test_title_update_and_version_conflict(client):
+    created = client.post("/api/v1/works", json={"title": "旧名"}).json()
+    story_id = created["id"]
+    updated = client.put(f"/api/v1/stories/{story_id}/title", json={"title": "新名", "expected_version": created["version"]})
+    assert updated.status_code == 200
+    assert updated.json()["title"] == "新名"
+    assert updated.json()["version"] == created["version"] + 1
+    conflict = client.put(f"/api/v1/stories/{story_id}/title", json={"title": "再改", "expected_version": created["version"]})
+    assert conflict.status_code == 409

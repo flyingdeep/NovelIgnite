@@ -154,6 +154,60 @@ def update_concept(db: Session, story_id: str, data: ConceptUpdate) -> StoryArti
     return artifact
 
 
+def _generate_title_if_unnamed(db: Session, story) -> None:
+    """After Concept confirmation, auto-generate a working title if the story is still unnamed.
+
+    Never fails the confirm flow: on any error the default title is kept and the author
+    can still rename via the title endpoint.
+    """
+    if story.title and not story.title.startswith("未命名故事"):
+        return
+    config = get_ai_config(db, story.id)
+    spec = _model_for_config(config.model)
+    task = GenerationTask(
+        story_id=story.id,
+        action="generate_title",
+        target_type="story",
+        model_snapshot=json.dumps({"model": config.model, "temperature": config.temperature, "reasoning_strength": config.reasoning_strength}, ensure_ascii=False),
+        input_ref=json.dumps({"story_id": story.id}, ensure_ascii=False),
+        status="running",
+    )
+    db.add(task)
+    db.flush()
+    try:
+        adapters = build_adapters()
+        adapter = adapters.get(spec.provider)
+        concept = latest_concept(db, story.id)
+        payload = _payload(concept) if concept else {}
+        messages = [
+            {"role": "system", "content": "你是小说编辑。根据故事概念生成一个精炼的中文书名（2-8 字为宜，最多 20 字）。只返回合法 JSON：{\"title\":\"书名\"}，不要 markdown 或多余文字。"},
+            {"role": "user", "content": (
+                f"题材：{payload.get('genre', '')}\n"
+                f"风格：{payload.get('style', '')}\n"
+                f"篇幅：{payload.get('length', '')}\n"
+                f"故事梗概：{payload.get('summary', '')}\n"
+                f"主题：{payload.get('theme', '')}"
+            )},
+        ]
+        title = None
+        if adapter is not None:
+            raw = adapter.complete(messages, temperature=config.temperature, reasoning_strength=config.reasoning_strength, json_mode=True)
+            from app.infrastructure.model_adapter import extract_json
+            title = str(extract_json(raw).get("title", "")).strip()
+        if title:
+            story.title = title[:200]
+            story.version += 1
+            task.status = "succeeded"
+            task.output_summary = json.dumps({"title": story.title}, ensure_ascii=False)
+        else:
+            task.status = "failed"
+            task.error_type = "empty_title"
+    except Exception as exc:
+        task.status = "failed"
+        task.error_type = type(exc).__name__
+    db.commit()
+
+
 def confirm_concept(db: Session, story_id: str, data: ConceptConfirm) -> StoryArtifact:
     story = get_story_or_404(db, story_id)
     current = latest_concept(db, story_id)
@@ -167,5 +221,9 @@ def confirm_concept(db: Session, story_id: str, data: ConceptConfirm) -> StoryAr
     story.stage = "concept_confirmed"
     story.version += 1
     db.commit()
+    try:
+        _generate_title_if_unnamed(db, story)
+    except Exception:
+        db.rollback()
     db.refresh(current)
     return current
