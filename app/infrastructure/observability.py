@@ -18,6 +18,9 @@ from pathlib import Path
 LOG_DIR = Path(os.getenv("NOVEL_LOG_DIR", "logs"))
 _LOG_FILE = LOG_DIR / "app.jsonl"
 _RECENT_LIMIT = 300
+# 日志轮转：单文件超过该字节数即滚动为 app.jsonl.1/.2/...，保留最近 N 份
+_MAX_LOG_BYTES = int(os.getenv("NOVEL_MAX_LOG_BYTES", str(5 * 1024 * 1024)))
+_MAX_LOG_BACKUPS = 5
 
 _lock = threading.Lock()
 _metrics = {
@@ -36,8 +39,26 @@ def _ensure_dir() -> None:
         pass
 
 
+def _rotate_if_needed() -> None:
+    """Roll the log file when it exceeds the size cap (best-effort, never raises)."""
+    try:
+        if not _LOG_FILE.exists() or _LOG_FILE.stat().st_size < _MAX_LOG_BYTES:
+            return
+        for i in range(_MAX_LOG_BACKUPS - 1, 0, -1):
+            src = Path(f"{_LOG_FILE}.{i}")
+            dst = Path(f"{_LOG_FILE}.{i + 1}")
+            if src.exists():
+                if dst.exists():
+                    dst.unlink()
+                src.rename(dst)
+        _LOG_FILE.rename(Path(f"{_LOG_FILE}.1"))
+    except Exception:
+        pass
+
+
 def _write(payload: dict) -> None:
     _ensure_dir()
+    _rotate_if_needed()
     try:
         with open(_LOG_FILE, "a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
