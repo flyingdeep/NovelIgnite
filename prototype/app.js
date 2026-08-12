@@ -689,6 +689,9 @@ async function loadChaptersForCurrentStory() {
     if (response.length) {
       window.currentChapters = response;
       renderChaptersFromApi(response);
+    } else {
+      const note = document.querySelector("#chapter-plan-note");
+      if (note) note.textContent = book.stage === "blueprint_confirmed" || book.stage === "chapter_planning" ? "蓝图已确认 · 可生成章节雏形" : "等待蓝图确认";
     }
   } catch (error) {
     window.currentChapters = [];
@@ -760,12 +763,28 @@ function bindWorkspaceEvents() {
   }));
 }
 
-function simulateGeneration(label, complete) {
-  const saveState = document.querySelector("#save-state");
-  saveState.textContent = "◌ " + label;
+function showThinking(message = "AI 正在思考…", sub = "正在装配上下文与模型参数") {
+  document.querySelector("#thinking-text").textContent = message;
+  document.querySelector("#thinking-sub").textContent = sub;
+  const overlay = document.querySelector("#thinking-overlay");
+  overlay.hidden = false;
+  overlay.style.display = "flex";
+  document.body.style.overflow = "hidden";
+}
+
+function hideThinking() {
+  const overlay = document.querySelector("#thinking-overlay");
+  overlay.hidden = true;
+  overlay.style.display = "none";
+  document.body.style.overflow = "";
+}
+
+function simulateGeneration(label, complete, sub = "正在装配上下文与模型参数") {
+  showThinking(label, sub);
   document.querySelectorAll(".primary-button,.secondary-button").forEach((button) => { if (!button.disabled) button.dataset.wasDisabled = "false"; });
   setTimeout(() => {
-    saveState.textContent = "● 已保存";
+    hideThinking();
+    document.querySelector("#save-state").textContent = "● 已保存";
     complete();
   }, 1150);
 }
@@ -831,17 +850,17 @@ function bindEvents() {
   document.querySelector("#generate-concept").addEventListener("click", async () => {
     const book = currentBook();
     if (apiAvailable && book) {
-      simulateGeneration("正在生成 Story Concept…", async () => {
-        try {
-          const result = await apiRequest(`/stories/${book.id}/generations`, { method: "POST", body: JSON.stringify({ action: "generate_concept" }) });
-          book.stage = "idea_locked";
-          book.version = (book.version || 1) + 1;
-          window.currentConceptVersion = result.artifact.version;
-          applyConceptPayload(result.artifact.payload);
-          showScreen("concept");
-          toast("Story Concept 候选已生成。请编辑、锁定关键设定后确认。");
-        } catch (error) { toast("Concept 生成失败，原始创意未被修改。"); }
-      });
+      showThinking("正在生成 Story Concept…", "AI 正在根据你的创意构建概念候选");
+      try {
+        const result = await apiRequest(`/stories/${book.id}/generations`, { method: "POST", body: JSON.stringify({ action: "generate_concept" }) });
+        book.stage = "idea_locked";
+        book.version = (book.version || 1) + 1;
+        window.currentConceptVersion = result.artifact.version;
+        applyConceptPayload(result.artifact.payload);
+        showScreen("concept");
+        toast("Story Concept 候选已生成。请编辑、锁定关键设定后确认。");
+      } catch (error) { toast("Concept 生成失败，原始创意未被修改。"); }
+      finally { hideThinking(); }
       return;
     }
     if (book) book.stage = "concept";
@@ -850,6 +869,7 @@ function bindEvents() {
   document.querySelector("#confirm-concept").addEventListener("click", async () => {
     const book = currentBook();
     if (apiAvailable && book && window.currentConceptVersion) {
+      showThinking("正在确认 Concept…", "保存候选并推进到蓝图阶段");
       try {
         await saveConceptCandidate();
         const confirmed = await apiRequest(`/stories/${book.id}/concept/confirm`, { method: "POST", body: JSON.stringify({ expected_version: window.currentConceptVersion }) });
@@ -858,8 +878,10 @@ function bindEvents() {
         book.stage = "concept_confirmed";
         document.querySelector("#confirm-concept").style.display = "none";
         document.querySelector("#concept-stage-note").textContent = "已确认 · 当前版本为权威 Concept";
-        toast("Concept 已确认。原始创意保持只读，可进入下一阶段。");
+        toast("Concept 已确认，正在进入蓝图。");
+        showScreen("blueprint");
       } catch (error) { toast("Concept 确认失败，请检查版本是否已更新。"); }
+      finally { hideThinking(); }
       return;
     }
     simulateGeneration("正在保存 Concept 并生成 Blueprint…", () => { showScreen("blueprint"); toast("Concept 已确认。Blueprint 保持为候选，需再次确认后创建章节计划。"); });
@@ -867,12 +889,16 @@ function bindEvents() {
   document.querySelector("#generate-blueprint").addEventListener("click", async () => {
     const book = currentBook();
     if (apiAvailable && book) {
-      const result = await apiRequest(`/stories/${book.id}/blueprint/generations`, { method: "POST", body: JSON.stringify({ action: "generate_blueprint" }) });
-      result.artifacts.forEach((artifact) => { if (blueprintData[artifact.kind]) blueprintPayloadToUi(artifact.kind, artifact); });
-      window.currentBlueprintVersions = Object.fromEntries(result.artifacts.map((artifact) => [artifact.kind, artifact.version]));
-      document.querySelector("#blueprint-stage-note").textContent = "AI 候选 · 尚未确认";
-      renderBlueprint("characters");
-      toast("Blueprint 四个分类候选已生成，请逐项查看后确认。");
+      showThinking("正在生成四类蓝图候选…", "AI 正在构建 Characters / World / Timeline / Arc");
+      try {
+        const result = await apiRequest(`/stories/${book.id}/blueprint/generations`, { method: "POST", body: JSON.stringify({ action: "generate_blueprint" }) });
+        result.artifacts.forEach((artifact) => { if (blueprintData[artifact.kind]) blueprintPayloadToUi(artifact.kind, artifact); });
+        window.currentBlueprintVersions = Object.fromEntries(result.artifacts.map((artifact) => [artifact.kind, artifact.version]));
+        document.querySelector("#blueprint-stage-note").textContent = "AI 候选 · 尚未确认";
+        renderBlueprint("characters");
+        toast("Blueprint 四个分类候选已生成，请逐项查看后确认。");
+      } catch (error) { toast("Blueprint 生成失败，请先确认 Concept。"); }
+      finally { hideThinking(); }
       return;
     }
     toast("当前为本地原型演示，蓝图候选使用示例数据。");
@@ -880,13 +906,16 @@ function bindEvents() {
   document.querySelector("#confirm-blueprint").addEventListener("click", async () => {
     const book = currentBook();
     if (apiAvailable && book && window.currentBlueprintVersions) {
+      showThinking("正在确认 Blueprint…", "更新作品阶段并创建初始 Living State");
       try {
         await apiRequest(`/stories/${book.id}/blueprint/confirm`, { method: "POST", body: JSON.stringify({ expected_versions: window.currentBlueprintVersions }) });
         book.stage = "blueprint_confirmed";
         document.querySelector("#confirm-blueprint").style.display = "none";
         document.querySelector("#blueprint-stage-note").textContent = "已确认 · 当前版本为权威 Blueprint";
-        toast("Blueprint 已确认，可进入下一阶段章节规划。");
+        toast("Blueprint 已确认，正在进入章节规划。");
+        showScreen("chapters");
       } catch (error) { toast("Blueprint 确认失败，请确保四个分类都已生成且版本未冲突。"); }
+      finally { hideThinking(); }
       return;
     }
     simulateGeneration("正在生成 Chapter Plan 雏形…", () => { showScreen("chapters"); toast("章节雏形已生成。仅 Chapter 01 处于 active 状态。"); });
@@ -895,6 +924,7 @@ function bindEvents() {
   document.querySelector("#generate-chapter-plan").addEventListener("click", async () => {
     const book = currentBook();
     if (!apiAvailable || !book) { toast("当前没有可生成的作品。"); return; }
+    showThinking("正在根据蓝图规划章节…", "AI 正在生成章节卡片与逐章激活");
     try {
       const result = await apiRequest(`/stories/${book.id}/chapter-plan`, { method: "POST", body: JSON.stringify({ action: "generate_chapter_plan" }) });
       window.currentChapters = result.chapters;
@@ -902,6 +932,7 @@ function bindEvents() {
       document.querySelector("#chapter-plan-note").textContent = "已生成 · 第 1 章已激活";
       toast("章节雏形已生成。仅第 1 章可进入工作台。");
     } catch (error) { toast("章节计划生成失败，请先确认 Blueprint。"); }
+    finally { hideThinking(); }
   });
   document.querySelectorAll(".blueprint-tab").forEach((tab) => tab.addEventListener("click", () => renderBlueprint(tab.dataset.blueprint)));
   document.querySelector("#chapter-grid").addEventListener("click", (event) => { const target = event.target.closest("[data-nav]"); if (target) showScreen(target.dataset.nav); });
