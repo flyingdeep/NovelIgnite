@@ -770,19 +770,62 @@ function simulateGeneration(label, complete) {
   }, 1150);
 }
 
+let ideaSaveTimer = null;
+let ideaSaveInFlight = false;
+let ideaSaveDirty = false;
+
+async function flushIdeaSave(book) {
+  if (!book || !apiAvailable || book.stage !== "idea") return;
+  if (ideaSaveInFlight) {
+    ideaSaveDirty = true;
+    return;
+  }
+  ideaSaveInFlight = true;
+  ideaSaveDirty = false;
+  try {
+    const updated = await apiRequest(`/stories/${book.id}/idea`, {
+      method: "PUT",
+      body: JSON.stringify({ idea_text: book.idea, expected_version: book.version || 1 }),
+    });
+    book.version = updated.version;
+  } catch (error) {
+    if (error && error.message === "API 409") {
+      try {
+        const fresh = await apiRequest(`/works/${book.id}`);
+        book.version = fresh.version;
+        if (book.stage === "idea" && fresh.stage === "idea") {
+          const updated = await apiRequest(`/stories/${book.id}/idea`, {
+            method: "PUT",
+            body: JSON.stringify({ idea_text: book.idea, expected_version: fresh.version }),
+          });
+          book.version = updated.version;
+        } else {
+          book.stage = fresh.stage;
+          renderIdea();
+        }
+      } catch (e) { /* 保留原文，不覆盖 */ }
+    }
+  } finally {
+    ideaSaveInFlight = false;
+    if (ideaSaveDirty) {
+      clearTimeout(ideaSaveTimer);
+      ideaSaveTimer = setTimeout(() => flushIdeaSave(currentBook()), 600);
+    }
+  }
+}
+
 function bindEvents() {
   document.querySelectorAll("[data-nav]").forEach((button) => button.addEventListener("click", () => showScreen(button.dataset.nav)));
   document.querySelectorAll("[data-toast]").forEach((button) => button.addEventListener("click", () => toast(button.dataset.toast)));
   document.querySelector("#idea-input").addEventListener("input", (event) => {
     document.querySelector("#idea-count").textContent = `${event.target.value.length} / 2,000`;
     const book = currentBook();
-    if (book && book.stage === "idea") {
-      book.idea = event.target.value;
-      if (apiAvailable) {
-        apiRequest(`/stories/${book.id}/idea`, { method: "PUT", body: JSON.stringify({ idea_text: event.target.value, expected_version: book.version || 1 }) })
-          .then((updated) => { book.version = updated.version; })
-          .catch(() => undefined);
-      }
+    if (!book) return;
+    book.idea = event.target.value;
+    if (apiAvailable && book.stage === "idea") {
+      ideaSaveDirty = true;
+      clearTimeout(ideaSaveTimer);
+      ideaSaveTimer = setTimeout(() => flushIdeaSave(book), 600);
     }
   });
   document.querySelector("#generate-concept").addEventListener("click", async () => {
