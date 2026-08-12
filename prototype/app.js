@@ -518,6 +518,7 @@ function showScreen(id) {
   if (id === "idea") renderIdea();
   if (id === "concept") loadConceptForCurrentStory();
   if (id === "blueprint") loadBlueprintForCurrentStory();
+  if (id === "chapters") loadChaptersForCurrentStory();
   updateTopState();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
@@ -671,33 +672,6 @@ function openConfig() {
 }
 
 function renderChapters() {
-  async function loadChaptersForCurrentStory() {
-    const book = currentBook();
-    if (!apiAvailable || !book) return;
-    try {
-      const response = await apiRequest(`/stories/${book.id}/chapters`);
-      if (response.length) {
-        window.currentChapters = response;
-        renderChaptersFromApi(response);
-      }
-    } catch (error) {
-      window.currentChapters = [];
-    }
-  }
-  function renderChaptersFromApi(items) {
-    document.querySelector("#chapter-grid").innerHTML = items.map((chapter) => {
-      const active = chapter.access_status === "active";
-      return `<article class="chapter-card ${active ? "active" : "locked"}">
-        <span class="chapter-number">CHAPTER ${String(chapter.ordinal).padStart(2, "0")}</span>
-        <span class="tag ${active ? "blue" : ""}">${active ? "可进入 · 当前章" : "🔒 未激活 · 雏形"}</span>
-        <h3>${chapter.title}</h3><p>${chapter.goal || chapter.summary}</p>
-        <button class="${active ? "primary-button" : "secondary-button"}" type="button" ${active ? "data-nav=\"workspace\"" : "data-toast=\"后序章节保持锁定，完成当前章并确认 Chapter Delta 后才会激活。\""}>${active ? "进入工作台 →" : "查看计划雏形"}</button>
-      </article>`;
-    }).join("");
-    const active = items.find((chapter) => chapter.access_status === "active");
-    if (active) document.querySelector(".chapter-summary").firstElementChild.innerHTML = `<b>${items.length} 章</b><span>·</span>当前计划 · 第 ${active.ordinal} 章已激活`;
-  }
-    if (id === "chapters") loadChaptersForCurrentStory();
   document.querySelector("#chapter-grid").innerHTML = chapters.map(([no, title, text, state]) => `
     <article class="chapter-card ${state}">
       <span class="chapter-number">CHAPTER ${no}</span>
@@ -705,6 +679,34 @@ function renderChapters() {
       <h3>${title}</h3><p>${text}</p>
       <button class="${state === "active" ? "primary-button" : "secondary-button"}" type="button" ${state === "active" ? "data-nav=\"workspace\"" : "data-toast=\"后序章节保持为计划雏形，完成并确认当前章 Delta 后才会激活。\""}>${state === "active" ? "进入工作台 →" : "查看计划雏形"}</button>
     </article>`).join("");
+}
+
+async function loadChaptersForCurrentStory() {
+  const book = currentBook();
+  if (!apiAvailable || !book) return;
+  try {
+    const response = await apiRequest(`/stories/${book.id}/chapters`);
+    if (response.length) {
+      window.currentChapters = response;
+      renderChaptersFromApi(response);
+    }
+  } catch (error) {
+    window.currentChapters = [];
+  }
+}
+
+function renderChaptersFromApi(items) {
+  document.querySelector("#chapter-grid").innerHTML = items.map((chapter) => {
+    const active = chapter.access_status === "active";
+    return `<article class="chapter-card ${active ? "active" : "locked"}">
+      <span class="chapter-number">CHAPTER ${String(chapter.ordinal).padStart(2, "0")}</span>
+      <span class="tag ${active ? "blue" : ""}">${active ? "可进入 · 当前章" : "🔒 未激活 · 雏形"}</span>
+      <h3>${chapter.title}</h3><p>${chapter.goal || chapter.summary}</p>
+      <button class="${active ? "primary-button" : "secondary-button"}" type="button" ${active ? "data-nav=\"workspace\"" : "data-toast=\"后序章节保持锁定，完成当前章并确认 Chapter Delta 后才会激活。\""}>${active ? "进入工作台 →" : "查看计划雏形"}</button>
+    </article>`;
+  }).join("");
+  const active = items.find((chapter) => chapter.access_status === "active");
+  if (active) document.querySelector(".chapter-summary").firstElementChild.innerHTML = `<b>${items.length} 章</b><span>·</span>当前计划 · 第 ${active.ordinal} 章已激活`;
 }
 
 function beatHtml([name, state, content, type], index) {
