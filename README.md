@@ -30,6 +30,16 @@ py -3.13 -m alembic upgrade head
 py -3.13 -m uvicorn app.main:app --reload
 ```
 
+> **从旧版本升级：** 如果你此前使用过旧实现（`app_v1_archived`），本地 `novel_ignite.db` 可能是旧结构库（`stories` 表缺少 `stage`/`idea_text` 列），直接启动会在 `/api/v1/works` 返回 500。此时请先备份并重建数据库：
+>
+> ```powershell
+> Copy-Item novel_ignite.db novel_ignite_v1_archived.db   # 备份旧数据
+> Remove-Item novel_ignite.db
+> py -3.13 -m alembic upgrade head                        # 从零创建新结构库
+> ```
+>
+> 旧库已归档为 `novel_ignite_v1_archived.db`（已被 `.gitignore` 排除，不会提交）。
+
 访问：
 
 - `http://127.0.0.1:8000/prototype/`：当前原型与真实 Phase 1–4 API。
