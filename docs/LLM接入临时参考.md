@@ -4,11 +4,13 @@
 
 ## 模型配置
 
-| 模型 | `base_url` | `model` | API Key 环境变量 | 备注 |
-|---|---|---|---|---|
-| Agnes | `https://apihub.agnes-ai.com/v1` | `agnes-2.5-flash` | `AGNES_API_KEY` | OpenAI 兼容；思考模式经 `chat_template_kwargs.enable_thinking` 开启；`agnes-2.0-flash` 仍可作为兼容回退 |
-| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-v4-flash` | `DEEPSEEK_API_KEY` | OpenAI 兼容；思考模式默认开启，需 `extra_body.thinking={type:enabled}` + 顶层 `reasoning_effort`；思考模式下 `temperature` 不生效 |
-| Grok | `https://modelflare.dev/v1` | `grok-4.5` | `GROK_API_KEY` | OpenAI 兼容；推理无法关闭（默认 high），顶层 `reasoning_effort`(low/medium/high)；不发送 `response_format` |
+| 模型 | `base_url` | `model` | API Key 环境变量 | 最大输出 | 备注 |
+|---|---|---|---|---|---|
+| Agnes | `https://apihub.agnes-ai.com/v1` | `agnes-2.5-flash` | `AGNES_API_KEY` | 65.5K | OpenAI 兼容；思考模式经 `chat_template_kwargs.enable_thinking` 开启；`agnes-2.0-flash` 仍可作为兼容回退 |
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-v4-flash` | `DEEPSEEK_API_KEY` | 384K | OpenAI 兼容；思考模式默认开启，需 `extra_body.thinking={type:enabled}` + 顶层 `reasoning_effort`；思考模式下 `temperature` 不生效 |
+| Grok | `https://modelflare.dev/v1` | `grok-4.5` | `GROK_API_KEY` | 500K | OpenAI 兼容；推理无法关闭（默认 high），顶层 `reasoning_effort`(low/medium/high)；不发送 `response_format` |
+
+> 生成调用不显式传 `max_tokens` 时，适配器默认使用各模型官方最大输出上限。
 
 ## 思考 / 推理模式
 

@@ -57,6 +57,7 @@ py -3.13 -m uvicorn app.main:app --reload
 | Grok | `https://modelflare.dev/v1` | `grok-4.5` | `GROK_API_KEY` | 不发送 `response_format`，自动容错解析；推理内置，顶层 `reasoning_effort` |
 
 - 推理强度（low/medium/high）按各模型官方文档传递：DeepSeek 顶层 `reasoning_effort`（medium 映射 high）、Agnes `chat_template_kwargs.enable_thinking`、Grok 顶层 `reasoning_effort`。
+- 各模型最大输出按官方上限：Agnes 2.5 65.5K / DeepSeek v4-flash 384K / Grok 4.5 500K；生成调用默认使用该上限。
 
 - `.env` 只在服务端读取，不能提交到 Git。
 - 模型、Temperature 和推理强度可以通过作品级 AI 配置保存。

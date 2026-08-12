@@ -22,17 +22,19 @@ class ModelSpec:
     #   "agnes":    extra_body.chat_template_kwargs={enable_thinking: true/false}
     #   "grok":     顶层 reasoning_effort(low/medium/high)，推理无法关闭
     thinking: str = "builtin"
+    # 官方允许的最大输出 tokens（DeepSeek 384K / Agnes 2.5 65.5K / Grok 4.5 500K）
+    max_output_tokens: int = 4096
 
 
 MODEL_SPECS = (
-    ModelSpec("agnes", "Agnes 2.5 Flash", "agnes-2.5-flash", "https://apihub.agnes-ai.com/v1", "AGNES_API_KEY", True, "agnes"),
-    ModelSpec("deepseek", "DeepSeek V4 Flash", "deepseek-v4-flash", "https://api.deepseek.com/v1", "DEEPSEEK_API_KEY", True, "deepseek"),
-    ModelSpec("grok", "Grok 4.5", "grok-4.5", "https://modelflare.dev/v1", "GROK_API_KEY", False, "grok"),
+    ModelSpec("agnes", "Agnes 2.5 Flash", "agnes-2.5-flash", "https://apihub.agnes-ai.com/v1", "AGNES_API_KEY", True, "agnes", 65536),
+    ModelSpec("deepseek", "DeepSeek V4 Flash", "deepseek-v4-flash", "https://api.deepseek.com/v1", "DEEPSEEK_API_KEY", True, "deepseek", 384000),
+    ModelSpec("grok", "Grok 4.5", "grok-4.5", "https://modelflare.dev/v1", "GROK_API_KEY", False, "grok", 500000),
 )
 
 
 class ModelAdapter(Protocol):
-    def complete(self, messages: list[dict[str, str]], *, temperature: float = 0.7, reasoning_strength: str = "medium", json_mode: bool = False, max_tokens: int = 4096) -> str: ...
+    def complete(self, messages: list[dict[str, str]], *, temperature: float = 0.7, reasoning_strength: str = "medium", json_mode: bool = False, max_tokens: int | None = None) -> str: ...
 
 
 def extract_json(text: str) -> Any:
@@ -53,12 +55,14 @@ class OpenAICompatibleAdapter:
         self.spec = spec
         self.timeout = timeout
 
-    def complete(self, messages: list[dict[str, str]], *, temperature: float = 0.7, reasoning_strength: str = "medium", json_mode: bool = False, max_tokens: int = 4096) -> str:
+    def complete(self, messages: list[dict[str, str]], *, temperature: float = 0.7, reasoning_strength: str = "medium", json_mode: bool = False, max_tokens: int | None = None) -> str:
         from openai import OpenAI
 
         api_key = os.getenv(self.spec.api_key_env) or getattr(settings, self.spec.api_key_env.lower(), "")
         if not api_key:
             raise RuntimeError(f"Missing model API key: {self.spec.api_key_env}")
+        if max_tokens is None:
+            max_tokens = self.spec.max_output_tokens
         client = OpenAI(base_url=self.spec.base_url, api_key=api_key, timeout=self.timeout)
         kwargs: dict[str, Any] = {
             "model": self.spec.model,

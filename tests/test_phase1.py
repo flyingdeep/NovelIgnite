@@ -95,6 +95,23 @@ def test_agnes_spec_upgraded_to_25():
     assert agnes.name == "Agnes 2.5 Flash"
 
 
+def test_model_max_output_tokens_from_official_docs():
+    from app.infrastructure.model_adapter import MODEL_SPECS
+
+    limits = {spec.provider: spec.max_output_tokens for spec in MODEL_SPECS}
+    assert limits["agnes"] == 65536  # Agnes 2.5 Flash：最大输出 65.5K
+    assert limits["deepseek"] == 384000  # DeepSeek v4-flash：最大输出 384K
+    assert limits["grok"] == 500000  # Grok 4.5：500K
+
+
+def test_adapter_uses_spec_max_tokens_by_default(monkeypatch):
+    from app.infrastructure.model_adapter import MODEL_SPECS
+
+    spec = next(s for s in MODEL_SPECS if s.provider == "deepseek")
+    captured = _capture_adapter_kwargs(monkeypatch, spec, json_mode=True)
+    assert captured["max_tokens"] == 384000
+
+
 def test_deepseek_thinking_params(monkeypatch):
     from app.infrastructure.model_adapter import MODEL_SPECS
 
