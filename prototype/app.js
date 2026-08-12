@@ -388,7 +388,18 @@ const API_BASE = "/api/v1";
 let apiAvailable = false;
 
 async function apiRequest(path, options = {}) {
-  const response = await fetch(`${API_BASE}${path}`, { headers: { "Content-Type": "application/json", ...(options.headers || {}) }, ...options });
+  const controller = new AbortController();
+  const timeoutMs = options.timeoutMs || 160000;
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, { headers: { "Content-Type": "application/json", ...(options.headers || {}) }, signal: controller.signal, ...options });
+  } catch (error) {
+    if (error && error.name === "AbortError") throw new Error("请求超时");
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
   if (!response.ok) throw new Error(`API ${response.status}`);
   return response.status === 204 ? null : response.json();
 }
@@ -752,8 +763,11 @@ function openConfig() {
     showModal("#config-modal");
   };
   const book = currentBook();
-  if (apiAvailable && book) apiRequest(`/stories/${book.id}/ai-config`).then(apply).catch(() => apply(aiConfig));
-  else apply(aiConfig);
+  // 先用本地缓存立即打开弹窗，避免等待网络；随后异步刷新真实配置
+  apply(aiConfig);
+  if (apiAvailable && book) {
+    apiRequest(`/stories/${book.id}/ai-config`).then(apply).catch(() => {});
+  }
 }
 
 function renderChapters() {
@@ -981,7 +995,18 @@ function bindEvents() {
         const renamed = await refreshStoryTitle(book);
         document.querySelector("#confirm-concept").style.display = "none";
         document.querySelector("#concept-stage-note").textContent = "已确认 · 当前版本为权威 Concept";
-        toast(renamed ? `Concept 已确认，AI 已生成书名《${book.title}》，可点击顶部书名修改。` : "Concept 已确认，正在进入蓝图。");
+        // 确认后自动生成蓝图候选，无需用户再点「生成候选」
+        showThinking("正在根据概念生成蓝图…", "AI 正在构建 Characters / World / Timeline / Arc");
+        try {
+          const result = await apiRequest(`/stories/${book.id}/blueprint/generations`, { method: "POST", body: JSON.stringify({ action: "generate_blueprint" }) });
+          result.artifacts.forEach((artifact) => { if (blueprintData[artifact.kind]) blueprintPayloadToUi(artifact.kind, artifact); });
+          blueprintHasData = true;
+          window.currentBlueprintVersions = Object.fromEntries(result.artifacts.map((artifact) => [artifact.kind, artifact.version]));
+          toast(renamed ? `Concept 已确认，AI 已生成书名《${book.title}》，蓝图候选已自动生成。` : "Concept 已确认，蓝图候选已自动生成，请查看后确认。");
+        } catch (blueprintError) {
+          blueprintHasData = false;
+          toast(renamed ? `Concept 已确认，AI 已生成书名《${book.title}》；蓝图自动生成失败，可稍后手动生成。` : "Concept 已确认；蓝图自动生成失败，可稍后手动生成。");
+        }
         showScreen("blueprint");
       } catch (error) { toast("Concept 确认失败，请检查版本是否已更新。"); }
       finally { hideThinking(); }

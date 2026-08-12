@@ -111,7 +111,7 @@ def generate_concept(db: Session, story_id: str, request: ConceptGenerationReque
         if adapter is None:
             payload = _fallback_concept(story.idea_text)
         else:
-            raw = adapter.complete(messages, temperature=config.temperature, reasoning_strength=config.reasoning_strength, json_mode=True)
+            raw = adapter.complete(messages, temperature=config.temperature, reasoning_strength=config.reasoning_strength, json_mode=True, action="generate_concept")
             from app.infrastructure.model_adapter import extract_json
             payload = _normalize_concept_payload(extract_json(raw))
         previous = latest_concept(db, story.id)
@@ -208,7 +208,7 @@ def _generate_title_if_unnamed(db: Session, story) -> None:
         ]
         title = None
         if adapter is not None:
-            raw = adapter.complete(messages, temperature=config.temperature, reasoning_strength=config.reasoning_strength, json_mode=True)
+            raw = adapter.complete(messages, temperature=config.temperature, reasoning_strength=config.reasoning_strength, json_mode=True, action="generate_title")
             from app.infrastructure.model_adapter import extract_json
             title = str(extract_json(raw).get("title", "")).strip()
         if title:

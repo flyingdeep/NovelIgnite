@@ -79,7 +79,7 @@ def generate_blueprint(db: Session, story_id: str, request: BlueprintGenerationR
     try:
         adapter = build_adapters().get(spec.provider)
         if adapter:
-            raw_payload = extract_json(adapter.complete(messages, temperature=config.temperature, reasoning_strength=config.reasoning_strength, json_mode=True))
+            raw_payload = extract_json(adapter.complete(messages, temperature=config.temperature, reasoning_strength=config.reasoning_strength, json_mode=True, action="generate_blueprint"))
             payload, fallback_used = normalize_blueprint_payload(raw_payload, story.idea_text, concept_payload)
         else:
             payload = fallback_blueprint(story.idea_text, concept_payload)

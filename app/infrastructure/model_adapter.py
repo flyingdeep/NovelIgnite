@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from app.infrastructure.config import settings
+from app.infrastructure.observability import record_generation
 
 
 @dataclass(frozen=True)
@@ -34,7 +36,7 @@ MODEL_SPECS = (
 
 
 class ModelAdapter(Protocol):
-    def complete(self, messages: list[dict[str, str]], *, temperature: float = 0.7, reasoning_strength: str = "medium", json_mode: bool = False, max_tokens: int | None = None) -> str: ...
+    def complete(self, messages: list[dict[str, str]], *, temperature: float = 0.7, reasoning_strength: str = "medium", json_mode: bool = False, max_tokens: int | None = None, action: str = "chat") -> str: ...
 
 
 def extract_json(text: str) -> Any:
@@ -55,7 +57,7 @@ class OpenAICompatibleAdapter:
         self.spec = spec
         self.timeout = timeout
 
-    def complete(self, messages: list[dict[str, str]], *, temperature: float = 0.7, reasoning_strength: str = "medium", json_mode: bool = False, max_tokens: int | None = None) -> str:
+    def complete(self, messages: list[dict[str, str]], *, temperature: float = 0.7, reasoning_strength: str = "medium", json_mode: bool = False, max_tokens: int | None = None, action: str = "chat") -> str:
         from openai import OpenAI
 
         api_key = os.getenv(self.spec.api_key_env) or getattr(settings, self.spec.api_key_env.lower(), "")
@@ -85,15 +87,33 @@ class OpenAICompatibleAdapter:
             kwargs["extra_body"] = extra_body
         if json_mode and self.spec.supports_json:
             kwargs["response_format"] = {"type": "json_object"}
-        response = client.chat.completions.create(**kwargs)
-        return response.choices[0].message.content or ""
+        start = time.perf_counter()
+        try:
+            response = client.chat.completions.create(**kwargs)
+            duration_ms = (time.perf_counter() - start) * 1000
+            usage = getattr(response, "usage", None)
+            tokens = None
+            if usage is not None:
+                tokens = {
+                    "prompt": getattr(usage, "prompt_tokens", None),
+                    "completion": getattr(usage, "completion_tokens", None),
+                    "total": getattr(usage, "total_tokens", None),
+                }
+            record_generation(action, self.spec.provider, succeeded=True, duration_ms=duration_ms, tokens=tokens)
+            return response.choices[0].message.content or ""
+        except Exception as exc:
+            duration_ms = (time.perf_counter() - start) * 1000
+            record_generation(action, self.spec.provider, succeeded=False, duration_ms=duration_ms, error_type=type(exc).__name__)
+            raise
 
 
 def configured_model_specs() -> list[ModelSpec]:
     return list(MODEL_SPECS)
 
 
-def build_adapters(timeout: float = 180) -> dict[str, OpenAICompatibleAdapter]:
+def build_adapters(timeout: float | None = None) -> dict[str, OpenAICompatibleAdapter]:
+    if timeout is None:
+        timeout = settings.model_timeout
     return {
         spec.provider: OpenAICompatibleAdapter(spec, timeout=timeout)
         for spec in MODEL_SPECS

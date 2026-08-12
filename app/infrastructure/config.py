@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     model_api_key: str = ""
     model_name: str = ""
     model_provider: str = "fake"
-    model_timeout: int = 300
+    model_timeout: int = 150
     agnes_api_key: str = ""
     deepseek_api_key: str = ""
     grok_api_key: str = ""

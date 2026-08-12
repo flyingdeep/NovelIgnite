@@ -77,7 +77,7 @@ def generate_chapter_plan(db: Session, story_id: str, request: ChapterPlanGenera
     try:
         adapter = build_adapters().get(spec.provider)
         if adapter:
-            payload = extract_json(adapter.complete(messages, temperature=config.temperature, reasoning_strength=config.reasoning_strength, json_mode=True))
+            payload = extract_json(adapter.complete(messages, temperature=config.temperature, reasoning_strength=config.reasoning_strength, json_mode=True, action="generate_chapter_plan"))
         else:
             payload = fallback_chapters(story.idea_text)
         if not isinstance(payload, list) or not payload:

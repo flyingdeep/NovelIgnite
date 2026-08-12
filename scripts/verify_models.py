@@ -9,28 +9,31 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.infrastructure.config import get_settings
-from app.projects.service import build_model_adapters
+from app.infrastructure.config import settings
+from app.infrastructure.model_adapter import build_adapters, configured_model_specs
 
-IDEA = "一位记忆鉴定师发现自己的过去正在地下拍卖场被分批出售，他决定潜入拍卖场找回属于自己的记忆。"
+IDEA = "一只被遗弃的橘猫和一只走失的狗在寒夜街头相遇，共同抵御灾难，建立起超越物种的羁绊。"
 
 
 def main() -> int:
-    settings = get_settings()
-    adapters = build_model_adapters(settings)
+    adapters = build_adapters()
+    specs = {spec.provider: spec for spec in configured_model_specs()}
     failed = False
-    for provider in ("agnes", "deepseek", "grok"):
+    for provider, spec in specs.items():
         adapter = adapters.get(provider)
         if adapter is None:
             print(f"[{provider}] SKIP 未配置 API Key")
             continue
-        model_name = getattr(getattr(adapter, "spec", None), "model_name", "?")
-        print(f"[{provider}] 调用 {model_name} ...", flush=True)
+        print(f"[{provider}] 调用 {spec.model} ...", flush=True)
         try:
-            result = adapter.generate_concept(IDEA, {})
-            keys = sorted(result.keys())
-            sample = result.get("genre") or result.get("synopsis") or ""
-            print(f"[{provider}] OK 键={keys} 示例={str(sample)[:60]!r}")
+            text = adapter.complete(
+                [{"role": "user", "content": f"请根据创意生成一个极简 Story Concept（JSON）：{IDEA}"}],
+                temperature=0.7,
+                reasoning_strength="medium",
+                json_mode=spec.supports_json,
+                max_tokens=4096,
+            )
+            print(f"[{provider}] OK 输出长度={len(text or '')} 示例={str(text)[:60]!r}")
         except Exception as exc:  # noqa: BLE001
             failed = True
             print(f"[{provider}] FAIL {type(exc).__name__}: {exc}")

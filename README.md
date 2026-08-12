@@ -67,16 +67,22 @@ py -3.13 -m uvicorn app.main:app --reload
 ## 手工验收路径
 
 1. 在作品库创建作品，输入 Idea 并保存。
-2. 点击「AI生成概念」，审核 Concept 候选，编辑或锁定字段后确认。
-3. 进入 Blueprint，点击「生成候选」，查看 Characters / World / Timeline / Arc。
+2. 点击「AI生成概念」，审核 Concept 候选，编辑或锁定字段后确认；确认后**自动生成 Blueprint 候选**并进入蓝图页。
+3. 在 Blueprint 查看 Characters / World / Timeline / Arc（已自动生成，无需再点生成候选）。
 4. 确认四类 Blueprint，观察 Story 进入 `blueprint_confirmed` 并生成初始 Living State。
 5. 进入 Chapter Plan，点击「生成章节雏形」。
 6. 确认第 1 章为 active，其余章节为 locked；锁定章节不能进入或修改。
 
 所有写操作使用 `expected_version` 做乐观锁；状态、版本或 Lock 冲突会返回 `409`。
 
+## 可观测性
+
+- `GET /metrics`：JSON 指标快照（请求数/状态码分布、生成任务成功率/平均与最大耗时、按 action 与模型统计、错误类型计数、最近事件）。
+- `logs/app.jsonl`：结构化 JSONL 日志（请求、生成调用：模型/耗时/token/状态/错误类型、请求异常）。隐私约束：不记录完整提示词、正文与 API Key；日志目录被 `.gitignore` 排除。
+
 ## 主要 API
 
+- `GET /health`、`GET /metrics`
 - `GET/POST/DELETE /api/v1/works`
 - `PUT /api/v1/stories/{id}/idea`
 - `GET/PUT /api/v1/stories/{id}/ai-config`
@@ -101,14 +107,14 @@ py -3.13 -m alembic upgrade head
 py -3.13 -m pytest -q
 ```
 
-当前回归结果：**10 passed**。覆盖作品库、Idea 锁定、AI 配置、三模型适配、Concept 候选/确认、Blueprint 四分类、Living State 初始投影、Chapter Plan 逐章激活与锁定章节保护。
+当前回归结果：**22 passed**。覆盖作品库、Idea 锁定、AI 配置、三模型适配（含思考/推理参数与官方 max token）、Concept 候选/确认与卖点规范化、Blueprint 四分类全条目渲染、Living State 初始投影、Chapter Plan 逐章激活与锁定章节保护、标题生成、可观测性指标。
 
 ## 目录
 
 - `app/api/`：FastAPI 路由与 DTO。
 - `app/works/`：作品库、Concept、Blueprint 服务与模型。
 - `app/planning/`：Chapter Plan 模型、生成和访问控制。
-- `app/infrastructure/`：配置、SQLite、SQLAlchemy、模型适配器。
+- `app/infrastructure/`：配置、SQLite（WAL 并发）、SQLAlchemy、模型适配器、可观测性（指标/日志）。
 - `app/lore/`：全局实体领域预留。
 - `app/writing/`：正文生成领域预留。
 - `app/consistency/`：Snapshot、Delta、一致性领域预留。

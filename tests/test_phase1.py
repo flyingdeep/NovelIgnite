@@ -264,6 +264,31 @@ def test_title_update_and_version_conflict(client):
     assert conflict.status_code == 409
 
 
+def test_observability_records_generation_and_snapshot():
+    from app.infrastructure import observability
+
+    before = observability.snapshot()["generations"]["total"]
+    observability.record_generation("generate_concept", "deepseek", succeeded=True, duration_ms=120.5, tokens={"prompt": 10, "completion": 20})
+    observability.record_generation("generate_blueprint", "agnes", succeeded=False, duration_ms=3000.0, error_type="TimeoutError")
+    snap = observability.snapshot()
+    gens = snap["generations"]
+    assert gens["total"] >= before + 2
+    assert gens["by_action"]["generate_concept"]["succeeded"] == 1
+    assert gens["by_action"]["generate_blueprint"]["failed"] == 1
+    assert snap["errors"].get("TimeoutError", 0) >= 1
+    assert snap["requests"]["total"] >= 0
+    assert "recent_events" in snap
+
+
+def test_metrics_endpoint(client):
+    response = client.get("/metrics")
+    assert response.status_code == 200
+    body = response.json()
+    assert "generations" in body
+    assert "requests" in body
+    assert "recent_events" in body
+
+
 def test_concept_selling_points_normalized_to_list(client, monkeypatch):
     raw = '{"genre":"悬疑","summary":"测试梗概","selling_points":"卖点一；卖点二\\n卖点三"}'
     monkeypatch.setattr("app.works.concept_service.build_adapters", lambda: {"deepseek": FakeModelAdapter(raw)})
