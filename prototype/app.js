@@ -471,6 +471,8 @@ async function loadConceptForCurrentStory() {
     applyConceptPayload(artifact.payload);
     window.currentConceptVersion = artifact.version;
     window.currentConceptStatus = artifact.status;
+    const version = document.querySelector("#concept-version");
+    if (version) version.textContent = `AI 候选 · v${artifact.version}`;
     document.querySelector("#concept-stage-note").textContent = artifact.status === "confirmed" ? "已确认 · 当前版本为权威 Concept" : "AI 候选 · 尚未确认";
     const confirm = document.querySelector("#confirm-concept");
     if (confirm) confirm.style.display = artifact.status === "confirmed" ? "none" : "";
@@ -946,6 +948,30 @@ async function flushIdeaSave(book) {
   }
 }
 
+async function generateConcept(book) {
+  if (!book) return;
+  if (apiAvailable) {
+    if (!book.idea || !book.idea.trim()) { toast("请先写下创作意图，再生成概念。"); return; }
+    await flushIdeaSave(book);
+    showThinking("正在生成 Story Concept…", "AI 正在根据你的创意构建概念候选");
+    try {
+      const result = await apiRequest(`/stories/${book.id}/generations`, { method: "POST", body: JSON.stringify({ action: "generate_concept" }) });
+      book.stage = "idea_locked";
+      book.version = (book.version || 1) + 1;
+      window.currentConceptVersion = result.artifact.version;
+      applyConceptPayload(result.artifact.payload);
+      const version = document.querySelector("#concept-version");
+      if (version) version.textContent = `AI 候选 · v${result.artifact.version}`;
+      showScreen("concept");
+      toast("Story Concept 候选已生成。请编辑、锁定关键设定后确认。");
+    } catch (error) { toast("Concept 生成失败，原始创意未被修改。"); }
+    finally { hideThinking(); }
+    return;
+  }
+  book.stage = "concept";
+  simulateGeneration("正在生成 Story Concept…", () => { showScreen("concept"); toast("Story Concept 候选已生成。请编辑、锁定关键设定后确认。"); });
+}
+
 function bindEvents() {
   document.querySelectorAll("[data-nav]").forEach((button) => button.addEventListener("click", () => showScreen(button.dataset.nav)));
   document.querySelectorAll("[data-toast]").forEach((button) => button.addEventListener("click", () => toast(button.dataset.toast)));
@@ -960,27 +986,8 @@ function bindEvents() {
       ideaSaveTimer = setTimeout(() => flushIdeaSave(book), 600);
     }
   });
-  document.querySelector("#generate-concept").addEventListener("click", async () => {
-    const book = currentBook();
-    if (apiAvailable && book) {
-      if (!book.idea || !book.idea.trim()) { toast("请先写下创作意图，再生成概念。"); return; }
-      await flushIdeaSave(book);
-      showThinking("正在生成 Story Concept…", "AI 正在根据你的创意构建概念候选");
-      try {
-        const result = await apiRequest(`/stories/${book.id}/generations`, { method: "POST", body: JSON.stringify({ action: "generate_concept" }) });
-        book.stage = "idea_locked";
-        book.version = (book.version || 1) + 1;
-        window.currentConceptVersion = result.artifact.version;
-        applyConceptPayload(result.artifact.payload);
-        showScreen("concept");
-        toast("Story Concept 候选已生成。请编辑、锁定关键设定后确认。");
-      } catch (error) { toast("Concept 生成失败，原始创意未被修改。"); }
-      finally { hideThinking(); }
-      return;
-    }
-    if (book) book.stage = "concept";
-    simulateGeneration("正在生成 Story Concept…", () => { showScreen("concept"); toast("Story Concept 候选已生成。请编辑、锁定关键设定后确认。"); });
-  });
+  document.querySelector("#generate-concept").addEventListener("click", () => generateConcept(currentBook()));
+  document.querySelector("#re-generate-concept").addEventListener("click", () => generateConcept(currentBook()));
   document.querySelector("#confirm-concept").addEventListener("click", async () => {
     const book = currentBook();
     if (apiAvailable && book) {

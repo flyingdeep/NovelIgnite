@@ -16,7 +16,9 @@ if _is_sqlite:
     @event.listens_for(engine, "connect")
     def _set_sqlite_pragma(dbapi_connection, connection_record):  # noqa: ANN001
         cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
+        # 使用默认 journal（rollback journal）而非 WAL：避免 -wal/-shm 辅助文件
+        # 被误删导致数据库损坏；busy_timeout 缓解并发写锁。
+        cursor.execute("PRAGMA journal_mode=DELETE")
         cursor.execute("PRAGMA busy_timeout=30000")
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()

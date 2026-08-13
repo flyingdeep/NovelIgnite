@@ -34,6 +34,9 @@ def create_app() -> FastAPI:
             response = JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
         duration_ms = (time.perf_counter() - start) * 1000
         record_request(request.method, request.url.path, response.status_code, duration_ms)
+        # 开发期避免浏览器缓存过期的原型静态资源（app.js/styles.css 频繁迭代）
+        if request.url.path.startswith("/prototype/"):
+            response.headers["Cache-Control"] = "no-store"
         return response
 
     app.add_middleware(

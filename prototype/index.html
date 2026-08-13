@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>Novel Ignite · MVP 交互原型</title>
-  <link rel="stylesheet" href="styles.css?v=20260812">
+  <link rel="stylesheet" href="styles.css?v=20260813">
 </head>
 <body>
   <div class="app-shell">
@@ -47,8 +47,8 @@
         </section>
 
         <section class="screen" id="concept">
-          <div class="page-heading"><div><p class="eyebrow">STEP 02 · STORY CONCEPT</p><h1>故事概念</h1><p>AI 对原始意图给出的结构化候选。编辑、锁定你在意的字段，再确认进入全局蓝图。</p></div><div class="heading-actions"><button class="config-button" type="button" data-config>⚙ 生成设置</button><button class="secondary-button" type="button" data-loading="重新生成概念">↻ 重新生成</button><button class="primary-button" type="button" id="confirm-concept">确认概念并生成蓝图 →</button></div></div>
-          <div class="candidate-banner"><span>✦</span><div><b>AI 候选 · v1</b><small id="concept-stage-note">由配置模型生成 · 尚未确认</small></div><button class="text-button" type="button" data-toast="候选版本已保留。原型中可直接编辑字段后确认。">查看生成记录</button></div>
+          <div class="page-heading"><div><p class="eyebrow">STEP 02 · STORY CONCEPT</p><h1>故事概念</h1><p>AI 对原始意图给出的结构化候选。编辑、锁定你在意的字段，再确认进入全局蓝图。</p></div><div class="heading-actions"><button class="config-button" type="button" data-config>⚙ 生成设置</button><button class="secondary-button" type="button" id="re-generate-concept" data-loading="重新生成概念">↻ 重新生成</button><button class="primary-button" type="button" id="confirm-concept">确认概念并生成蓝图 →</button></div></div>
+          <div class="candidate-banner"><span>✦</span><div><b id="concept-version">AI 候选 · v1</b><small id="concept-stage-note">由配置模型生成 · 尚未确认</small></div><button class="text-button" type="button" data-toast="候选版本已保留。原型中可直接编辑字段后确认。">查看生成记录</button></div>
           <div class="concept-grid"><article class="panel"><div class="section-title"><h2>基础信息</h2><span>可编辑 · 可锁定</span></div><div class="field-grid"><label class="form-field"><span>故事类型<button class="lock" type="button">🔓 锁定</button></span><input id="concept-genre" placeholder="点击「AI生成概念」后由模型生成" /></label><label class="form-field"><span>叙事视角<button class="lock" type="button">🔓 锁定</button></span><input id="concept-viewpoint" placeholder="由模型根据创意生成" /></label><label class="form-field"><span>写作风格</span><input id="concept-style" placeholder="由模型根据创意生成" /></label><label class="form-field"><span>预计长度</span><input id="concept-length" placeholder="由模型根据创意生成" /></label></div></article><article class="panel concept-summary"><div class="section-title"><h2>故事简介</h2><span class="tag purple">建议</span></div><textarea id="concept-summary" placeholder="AI 将根据你的创意生成故事简介。"></textarea></article><article class="panel"><div class="section-title"><h2>核心主题</h2><button class="lock" type="button">🔓 锁定</button></div><p id="concept-theme" class="editable-copy" contenteditable="true"></p></article><article class="panel"><div class="section-title"><h2>主要冲突与卖点</h2><span class="tag">结构化建议</span></div><ul id="concept-selling-points" class="check-list"></ul></article></div>
         </section>
 
@@ -102,6 +102,6 @@
     </div>
   </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="app.js?v=20260812"></script>
+  <script src="app.js?v=20260813"></script>
 </body>
 </html>
