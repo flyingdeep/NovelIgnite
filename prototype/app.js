@@ -512,6 +512,8 @@ async function loadBlueprintForCurrentStory() {
     }
     const confirmed = ["characters", "world", "timeline", "arc"].every((kind) => data[kind]?.status === "confirmed");
     document.querySelector("#confirm-blueprint").style.display = confirmed ? "none" : "";
+    const toChapters = document.querySelector("#to-chapters");
+    if (toChapters) toChapters.style.display = confirmed ? "" : "none";
     document.querySelector("#blueprint-stage-note").textContent = confirmed ? "已确认 · 当前版本为权威 Blueprint" : (hasAny ? "AI 候选 · 尚未确认" : "尚未生成");
     renderBlueprint(document.querySelector(".blueprint-tab.active")?.dataset.blueprint || "characters");
   } catch (error) {
@@ -1048,7 +1050,21 @@ function bindEvents() {
         book.stage = "blueprint_confirmed";
         document.querySelector("#confirm-blueprint").style.display = "none";
         document.querySelector("#blueprint-stage-note").textContent = "已确认 · 当前版本为权威 Blueprint";
-        toast("Blueprint 已确认，正在进入章节规划。");
+        const toChapters = document.querySelector("#to-chapters");
+        if (toChapters) toChapters.style.display = "";
+        // 确认后自动生成章节雏形，无需用户再点「生成章节雏形」
+        showThinking("正在根据蓝图规划章节…", "AI 正在生成章节卡片与逐章激活");
+        try {
+          const result = await apiRequest(`/stories/${book.id}/chapter-plan`, { method: "POST", body: JSON.stringify({ action: "generate_chapter_plan" }) });
+          window.currentChapters = result.chapters;
+          renderChaptersFromApi(result.chapters);
+          document.querySelector("#chapter-plan-note").textContent = "已生成 · 第 1 章已激活";
+          toast("Blueprint 已确认，章节雏形已自动生成。仅第 1 章可进入工作台。");
+        } catch (chapterError) {
+          window.currentChapters = [];
+          document.querySelector("#chapter-plan-note").textContent = "蓝图已确认 · 可生成章节雏形";
+          toast("Blueprint 已确认；章节自动生成失败，可稍后手动生成。");
+        }
         showScreen("chapters");
       } catch (error) { toast("Blueprint 确认失败，请确保四个分类都已生成且版本未冲突。"); }
       finally { hideThinking(); }
@@ -1056,6 +1072,7 @@ function bindEvents() {
     }
     simulateGeneration("正在生成 Chapter Plan 雏形…", () => { showScreen("chapters"); toast("章节雏形已生成。仅 Chapter 01 处于 active 状态。"); });
   });
+  document.querySelector("#to-chapters").addEventListener("click", () => showScreen("chapters"));
   document.querySelector("#open-workspace").addEventListener("click", () => showScreen("workspace"));
   document.querySelector("#generate-chapter-plan").addEventListener("click", async () => {
     const book = currentBook();

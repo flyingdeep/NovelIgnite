@@ -310,3 +310,36 @@ def test_chapter_fallback_has_no_demo_content():
     for banned in ("林墨", "监管局", "拍卖", "沈砚", "鉴定"):
         assert banned not in blob
     assert "老木匠" in blob or "沙漠" in blob
+
+
+def test_chapter_plan_normalize_object_wrapper():
+    from app.planning.service import _normalize_chapter_plan
+
+    wrapped = {"chapters": [{"title": "第一章", "goal": "g", "summary": "s", "main_characters": ["焰"], "arc_role": "主线"}, {"title": "第二章"}]}
+    result = _normalize_chapter_plan(wrapped, "idea")
+    assert result is not None and len(result) == 2
+    assert result[1]["title"] == "第二章"
+    assert result[0]["main_characters"] == ["焰"]
+    assert _normalize_chapter_plan({"foo": "bar"}, "idea") is None
+    assert _normalize_chapter_plan("not a list", "idea") is None
+
+
+def test_chapter_plan_tolerates_object_wrapped_response(client, monkeypatch):
+    monkeypatch.setattr("app.works.concept_service.build_adapters", lambda: {})
+    monkeypatch.setattr("app.works.blueprint_service.build_adapters", lambda: {})
+    raw = '{"chapters": [{"title":"第一章","goal":"g1","summary":"s1","main_characters":["焰"],"arc_role":"主线"},{"title":"第二章","goal":"g2","summary":"s2"}]}'
+    monkeypatch.setattr("app.planning.service.build_adapters", lambda: {"deepseek": FakeModelAdapter(raw)})
+    created = client.post("/api/v1/works", json={"title": "章节包装"}).json()
+    story_id = created["id"]
+    client.put(f"/api/v1/stories/{story_id}/idea", json={"idea_text": "猫狗故事", "expected_version": created["version"]})
+    concept = client.post(f"/api/v1/stories/{story_id}/generations", json={"action": "generate_concept"}).json()["artifact"]
+    client.post(f"/api/v1/stories/{story_id}/concept/confirm", json={"expected_version": concept["version"]})
+    blueprints = client.post(f"/api/v1/stories/{story_id}/blueprint/generations", json={"action": "generate_blueprint"}).json()["artifacts"]
+    client.post(f"/api/v1/stories/{story_id}/blueprint/confirm", json={"expected_versions": {a["kind"]: a["version"] for a in blueprints}})
+    generated = client.post(f"/api/v1/stories/{story_id}/chapter-plan", json={"action": "generate_chapter_plan"})
+    assert generated.status_code == 200
+    chapters = generated.json()["chapters"]
+    assert len(chapters) == 2
+    assert chapters[0]["title"] == "第一章"
+    assert chapters[0]["access_status"] == "active"
+    assert chapters[1]["access_status"] == "locked"

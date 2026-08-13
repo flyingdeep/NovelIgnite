@@ -45,6 +45,33 @@ def get_chapter(db: Session, story_id: str, chapter_id: str) -> Chapter:
     return chapter
 
 
+def _normalize_chapter_plan(payload: Any, idea: str) -> list[dict[str, Any]] | None:
+    """Normalize LLM chapter-plan output into a clean list of chapter dicts.
+
+    Tolerates object wrappers ({"chapters": [...]}) and missing/odd fields;
+    returns None when no usable list can be extracted so the caller can fall back.
+    """
+    if isinstance(payload, dict):
+        for key in ("chapters", "plan", "items", "data", "list", "chapter_plan"):
+            if isinstance(payload.get(key), list):
+                payload = payload[key]
+                break
+    if not isinstance(payload, list):
+        return None
+    chapters: list[dict[str, Any]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        chapters.append({
+            "title": str(item.get("title") or "").strip() or f"第 {len(chapters) + 1} 章",
+            "goal": str(item.get("goal") or ""),
+            "summary": str(item.get("summary") or ""),
+            "main_characters": item.get("main_characters") if isinstance(item.get("main_characters"), list) else [],
+            "arc_role": str(item.get("arc_role") or ""),
+        })
+    return chapters or None
+
+
 def fallback_chapters(idea: str = "") -> list[dict[str, Any]]:
     """Deterministic placeholder plan derived from the author's idea.
 
@@ -77,11 +104,10 @@ def generate_chapter_plan(db: Session, story_id: str, request: ChapterPlanGenera
     try:
         adapter = build_adapters().get(spec.provider)
         if adapter:
-            payload = extract_json(adapter.complete(messages, temperature=config.temperature, reasoning_strength=config.reasoning_strength, json_mode=True, action="generate_chapter_plan"))
+            raw_payload = adapter.complete(messages, temperature=config.temperature, reasoning_strength=config.reasoning_strength, json_mode=True, action="generate_chapter_plan")
+            payload = _normalize_chapter_plan(extract_json(raw_payload), story.idea_text) or fallback_chapters(story.idea_text)
         else:
             payload = fallback_chapters(story.idea_text)
-        if not isinstance(payload, list) or not payload:
-            raise ValueError("Chapter Plan response must be a non-empty array")
         old = list(db.scalars(select(Chapter).where(Chapter.story_id == story.id)))
         for chapter in old:
             db.delete(chapter)
