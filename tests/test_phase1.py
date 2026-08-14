@@ -345,7 +345,7 @@ def test_generation_task_records_prompt_version(client, monkeypatch, tmp_path):
         ).first()
         assert row is not None
         assert row.action == "generate_concept"
-        assert row.prompt_version == prompt_version("generate_concept") == 1
+        assert row.prompt_version == prompt_version("generate_concept") >= 1
         assert row.status == "succeeded"
 
 

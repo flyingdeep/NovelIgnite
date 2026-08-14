@@ -1,7 +1,6 @@
-集中管理系统提示词（方案 A）：prompts.py + generation_tasks.prompt_version
+系统提示词升级 v2：能力拓展版（角色设定+方法论+质量要求+反模式），限定中文输出
 
-- 新增 app/infrastructure/prompts.py：全部 10 种生成任务 system prompt 按 action 集中维护（SYSTEM_PROMPTS）+ 版本号（PROMPT_VERSIONS），提供 system_prompt(action)/prompt_version(action) 访问器，未知 action 回退通用提示
-- 各服务层（concept/blueprint/planning.service/workspace/writing）system prompt 全部改为引用，消除散落硬编码
-- generation_tasks 新增 prompt_version 列（迁移 20260814_0007），每次生成随 model_snapshot 记录所用提示词版本，支撑可观测性追溯
-- 新增测试 test_prompts_module_covers_all_actions_and_versions、test_generation_task_records_prompt_version
-- README/技术架构/开发计划同步；50 单元测试通过
+- 全部 10 个提示词由「仅定义格式」升级为「角色设定 → 任务拆解 → 方法论 → 质量要求 → 硬约束 → 反模式」结构，并统一限定简体中文输出
+- 重点：正文写作提示词加入事实边界/五感/潜台词/节奏/POV 纪律/反翻译腔；概念提示词五步策划法+场景化卖点；Delta 提取区分事实与推测；一致性检查八类矛盾清单
+- PROMPT_VERSIONS 全部升为 2；测试断言改为动态版本对比
+- 真实模型验证：概念生成卖点全部场景化有画面感；50 单元测试通过
