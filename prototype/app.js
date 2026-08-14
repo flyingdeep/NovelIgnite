@@ -1528,7 +1528,7 @@ function bindWorkspaceEvents() {
     if (!apiAvailable || !book || !currentActiveChapterId) { toast("需要激活章节。"); return; }
     showThinking("正在重新生成 Beat 正文…", "将创建新版本并自动应用，历史保留");
     try {
-      await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/scenes/${sceneId}/generations`, { method: "POST", body: JSON.stringify({ action: "regenerate_beat", beat_id: beatId }) });
+      await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/scenes/${sceneId}/generations`, { method: "POST", body: JSON.stringify({ action: "regenerate_beat", beat_id: beatId }), timeoutMs: 600000 });
       currentWorkspaceContext = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/context`);
       renderWorkspace();
       toast("已生成新版本并自动应用，历史正文保留。");
@@ -1612,7 +1612,7 @@ function bindWorkspaceEvents() {
     if (!apiAvailable || !book || !currentActiveChapterId) { toast("需要激活章节。"); return; }
     showThinking("正在确认 Chapter Delta…", "更新 Living State 并激活下一章");
     try {
-      const result = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/deltas/confirm`, { method: "POST", body: JSON.stringify({}) });
+      const result = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/deltas/confirm`, { method: "POST", body: JSON.stringify({}), timeoutMs: 300000 });
       if (result.next_chapter) {
         book.stage = "writing";
         currentActiveChapterId = result.next_chapter.id;
@@ -1637,7 +1637,7 @@ function bindWorkspaceEvents() {
     if (!apiAvailable || !book || !currentActiveChapterId) { toast("需要激活章节后才能生成场景计划。"); return; }
     showThinking("正在根据章节目标生成场景计划…", "AI 正在规划 Scene 顺序与节拍");
     try {
-      const result = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/generations`, { method: "POST", body: JSON.stringify({ action: "generate_scene_plan" }) });
+      const result = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/generations`, { method: "POST", body: JSON.stringify({ action: "generate_scene_plan" }), timeoutMs: 300000 });
       currentWorkspaceContext = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/context`);
       renderWorkspace();
       toast(`已生成 ${result.scenes.length} 个场景计划。`);
@@ -1651,7 +1651,7 @@ function bindWorkspaceEvents() {
     if (!apiAvailable || !book || !currentActiveChapterId || !sceneId) { toast("需要激活章节后才能生成节拍计划。"); return; }
     showThinking("正在根据场景目标生成节拍计划…", "AI 正在规划 Beat 顺序");
     try {
-      await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/scenes/${sceneId}/generations`, { method: "POST", body: JSON.stringify({ action: "generate_beat_plan" }) });
+      await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/scenes/${sceneId}/generations`, { method: "POST", body: JSON.stringify({ action: "generate_beat_plan" }), timeoutMs: 300000 });
       currentWorkspaceContext = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/context`);
       renderWorkspace();
       toast("节拍计划已生成。");
@@ -1815,7 +1815,7 @@ function bindEvents() {
       showThinking("正在确认 Concept…", "保存候选并推进到蓝图阶段");
       try {
         await saveConceptCandidate();
-        const confirmed = await apiRequest(`/stories/${book.id}/concept/confirm`, { method: "POST", body: JSON.stringify({ expected_version: window.currentConceptVersion }) });
+        const confirmed = await apiRequest(`/stories/${book.id}/concept/confirm`, { method: "POST", body: JSON.stringify({ expected_version: window.currentConceptVersion }), timeoutMs: 300000 });
         window.currentConceptVersion = confirmed.version;
         window.currentConceptStatus = "confirmed";
         book.stage = "concept_confirmed";
@@ -1835,7 +1835,10 @@ function bindEvents() {
           toast(renamed ? `Concept 已确认，AI 已生成书名《${book.title}》；蓝图自动生成失败，可稍后手动生成。` : "Concept 已确认；蓝图自动生成失败，可稍后手动生成。");
         }
         showScreen("blueprint");
-      } catch (error) { toast("Concept 确认失败，请检查版本是否已更新。"); }
+      } catch (error) {
+        const message = error && error.message === "请求超时" ? "确认请求超时（模型较慢），后台可能仍在处理，请稍后刷新查看结果。" : "Concept 确认失败，请检查版本是否已更新。";
+        toast(message);
+      }
       finally { hideThinking(); }
       return;
     }
