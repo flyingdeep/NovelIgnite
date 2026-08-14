@@ -177,11 +177,11 @@ Blueprint 验收：Concept 未确认时生成返回 409；四类 Baseline 候选
 
 | 类型 | 文件 | 数量 | 状态 |
 |------|------|------|------|
-| 后端单元测试 | `tests/test_phase1.py` | 24 | ✅ 全部通过 |
+| 后端单元测试 | `tests/test_phase1.py` | 30 | ✅ 全部通过 |
 | 后端单元测试 | `tests/test_phase5.py` | 7 | ✅ 全部通过 |
 | 后端单元测试 | `tests/test_phase6.py` | 17 | ✅ 全部通过 |
 | E2E 冒烟测试 | `tests/e2e/test_smoke.py` | 3 | ✅ 全部通过 |
-| E2E 全流程测试 | `tests/e2e/test_full_flow.py` | 9 | ✅ 全部通过（无 Key 独立服务器，确定性回退） |
+| E2E 全流程测试 | `tests/e2e/test_full_flow.py` | 10 | ✅ 全部通过（无 Key 独立服务器，确定性回退） |
 
 ### 运行方式
 ```bash
@@ -253,3 +253,4 @@ playwright install chromium
 - 2026-08-14：**步骤条阶段约束（未推进到的步骤不允许进入）**：修复「生成蓝图后未确认即可进入 4/5/6 步并看到残留占位」。① 前端新增 `STAGE_SCREENS` 映射（后端 Story.stage → 可访问屏幕：idea/idea_locked 仅创意；concept_confirmed/blueprint_review 至蓝图；blueprint_confirmed 至章节；chapter_planning 至工作台；writing/done 至阅读），`canAccessScreen`/`updateStepbarLock` 按阶段锁定步骤条（4/5/6 等未解锁步骤灰显 `.step.disabled`）；`showScreen` 与 `[data-nav]` 点击双重防御，越权进入被阻止并 toast 提示原因。② 打开故事时 `refreshBookStage` 从后端刷新真实 stage；章节生成 / Delta 确认后同步前端 stage（chapter_planning / writing / done）。③ index.html 工作台静态演示占位（「Chapter 01 · 消失的委托人 / Scene 2 · 缺失报告」）中性化为「章节工作台 / 等待加载」，杜绝任何情况下的残留假内容。静态资源 bump `v20260816l`。E2E 新增 `test_stepbar_locked_until_stage_progression`（blueprint_review 下 4/5/6 锁定且点击被阻止），`test_reader_shows_continuous_prose` 改为先推进到 writing 再验证阅读（阅读在 writing/done 解锁）。13 项 E2E 全部通过；独立 headless 浏览器实测：blueprint_review 故事 4/5/6 灰显且点击不切换，冬夜同行（writing）全解锁。
 - 2026-08-14：**LLM 调用失败真实原因可溯源**：此前生成失败只记录异常类名（如 `BadRequestError`），无法区分超时/合规性拒绝/限流/参数错误。① `model_adapter.py` 新增 `_classify_error(exc)`：从异常提取 `error_type`（异常类）、`error_code`（提供商错误码，如 `content_filter`）、`http_status`（400/401/429/502…）、`error_category`（timeout/connection/auth/permission/rate_limit/not_found/server/bad_request/content_policy/api/other，内容策略关键词命中归为 content_policy）、`error_detail`（API 返回的错误说明，去控制字符并截断 300 字符，脱敏）。② `observability.record_generation` 记录上述字段到 `logs/app.jsonl` 的 generation 事件，`/metrics` 新增 `error_categories` 计数。③ 新增测试 `test_classify_error_reveals_real_failure_cause`（超时/合规拒绝/参数错误/限流/鉴权/未知异常）与 `test_generation_failure_logs_real_cause`（日志行含 error_code/http_status/error_category/error_detail）；顺带修复 `test_locked_chapter_context_is_readonly` 未 mock workspace 模型层、在真实 Key 环境偶发 502 的测试缺陷。52 项 pytest 通过。
 - 2026-08-14：**「概念生成失败」误报排查与前端超时修复**：用户反馈概念生成失败。核查可观测性（`logs/app.jsonl` + 数据库）确认**服务器端无任何 concept 失败记录**（最近概念 12993b23 成功且已确认；API 实测 Grok concept 24.7s 成功）。根因：**前端 160s AbortController 超时 vs Grok 慢**——日志显示 Grok 标题生成 172s、蓝图 159s 均接近/超过 160s，概念/蓝图/章节生成请求仍用默认 160s 超时，模型稍慢即被前端 abort 误报「生成失败」，而后端实际成功。修复：概念/蓝图（自动+手动）/章节（自动+手动）共 5 处生成请求超时从 160s 提至 300s；概念生成超时 toast 改为「生成请求超时（模型较慢），后台可能仍在生成，请稍后刷新查看结果」。静态资源 bump `v20260816m`。
+- 2026-08-16：**蓝图缺失自愈 + 内容策略拒绝可溯源 + 演示数据清理**：① **蓝图自愈**——修复「确认概念后进入蓝图页无任何内容」：根因是确认概念后自动生成蓝图在页面刷新/中断场景下未完成，且前端只拉取一次数据、失败仅显示空状态。现 `loadBlueprintForCurrentStory` 检测到概念已确认（`concept_confirmed`/`blueprint_review`）但蓝图缺失时，自动触发生成（超时 300s），成功后渲染并 toast，失败则显示空状态与「生成候选」重试提示。② **内容策略拒绝可溯源**——用户故事「身魂深渊」首次自愈失败时 `generation_tasks.error_type` 仅显示 `JSONDecodeError`，掩盖了真实原因（Grok 对成人向创意返回合规拒绝文本而非 JSON）。现 `extract_json` 解析失败时检测中英文合规拒绝表达（无法生成/抱歉/不能生成/内容政策/content policy/refus 等），命中则抛 `ContentPolicyRefusalError`（携带脱敏回复片段），`_classify_error` 将其归为 `content_policy`——失败原因不再与「输出格式错误」混淆。③ **蓝图演示数据清理**——`renderBlueprint` 在无真实数据（含未打开作品）时只渲染空状态，绝不展示顶层演示条目（此前 bootstrap 无 book 时会渲染静态「林墨/旧港区」演示数据）。④ 实测：「身魂深渊」（12993b23，确认概念后自动蓝图中断）进入蓝图页自动补齐生成真实蓝图（林婉儿·金牌特警 / 红莲帮帮主 / 李倩 等四分类候选），故事推进至 `blueprint_review`；headless 验证无故事时蓝图页仅显示空状态、无演示数据。静态资源 bump `v20260816n/o`。新增测试 `test_extract_json_marks_content_policy_refusal`、`test_classify_error_recognizes_content_policy_refusal`。54 项 pytest 通过。

@@ -166,6 +166,37 @@ def test_classify_error_reveals_real_failure_cause():
     assert r["error_detail"] == "boom"
 
 
+def test_extract_json_marks_content_policy_refusal():
+    """模型返回合规拒绝文本（非 JSON）时，归类为 ContentPolicyRefusalError 而非 JSONDecodeError。"""
+    import pytest
+    from app.infrastructure.model_adapter import ContentPolicyRefusalError, extract_json
+
+    refusal_texts = [
+        "抱歉，我无法生成此内容。请调整您的请求。",
+        "对不起，我不能创作涉及敏感内容的设定。",
+        "I'm sorry, but I cannot generate this content as it violates our content policy.",
+        "This request has been refused due to explicit content.",
+    ]
+    for text in refusal_texts:
+        with pytest.raises(ContentPolicyRefusalError) as excinfo:
+            extract_json(text)
+        assert excinfo.value.snippet  # 保留脱敏回复片段
+
+    # 正常非 JSON 内容仍抛原始 JSONDecodeError（不误伤）
+    with pytest.raises(ValueError):
+        extract_json("这只是一段普通的中文叙述，没有 JSON。")
+
+
+def test_classify_error_recognizes_content_policy_refusal():
+    """ContentPolicyRefusalError 被归类为 content_policy，detail 为脱敏回复片段。"""
+    from app.infrastructure.model_adapter import ContentPolicyRefusalError, _classify_error
+
+    r = _classify_error(ContentPolicyRefusalError("抱歉，我无法生成此内容。"))
+    assert r["error_category"] == "content_policy"
+    assert r["error_type"] == "ContentPolicyRefusalError"
+    assert "抱歉" in r["error_detail"]
+
+
 def test_generation_failure_logs_real_cause():
     """失败生成记录包含 error_code / http_status / error_category / error_detail。"""
     import os

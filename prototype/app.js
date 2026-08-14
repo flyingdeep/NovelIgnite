@@ -593,10 +593,30 @@ async function loadBlueprintForCurrentStory() {
   const book = currentBook();
   if (!apiAvailable || !book) return;
   try {
-    const data = await apiRequest(`/stories/${book.id}/blueprint`);
-    const hasAny = ["characters", "world", "timeline", "arc"].some((kind) => data[kind]);
-    blueprintHasData = hasAny;
-    window.currentBlueprintVersions = {};
+    let data = await apiRequest(`/stories/${book.id}/blueprint`);
+    let hasAny = ["characters", "world", "timeline", "arc"].some((kind) => data[kind]);
+    // 自愈：概念已确认但蓝图缺失（确认后自动生成中断/失败）时，进入蓝图页自动补齐。
+    if (!hasAny && (book.stage === "concept_confirmed" || book.stage === "blueprint_review")) {
+      showThinking("正在自动生成蓝图候选…", "检测到概念已确认但蓝图缺失，自动补齐 Characters / World / Timeline / Arc");
+      try {
+        const result = await apiRequest(`/stories/${book.id}/blueprint/generations`, { method: "POST", body: JSON.stringify({ action: "generate_blueprint" }), timeoutMs: 300000 });
+        result.artifacts.forEach((artifact) => { if (blueprintData[artifact.kind]) blueprintPayloadToUi(artifact.kind, artifact); });
+        blueprintHasData = true;
+        window.currentBlueprintVersions = Object.fromEntries(result.artifacts.map((artifact) => [artifact.kind, artifact.version]));
+        toast("蓝图候选已自动生成，请查看后确认。");
+        data = await apiRequest(`/stories/${book.id}/blueprint`);
+        hasAny = true;
+      } catch (e) {
+        blueprintHasData = false;
+        window.currentBlueprintVersions = {};
+        toast("蓝图自动生成失败，可点击「生成候选」重试。");
+        renderBlueprintEmpty();
+        return;
+      } finally {
+        hideThinking();
+      }
+    }
+    window.currentBlueprintVersions = window.currentBlueprintVersions || {};
     if (hasAny) {
       Object.entries(data).forEach(([kind, artifact]) => { if (artifact && blueprintData[kind]) blueprintPayloadToUi(kind, artifact); });
       ["characters", "world", "timeline", "arc"].forEach((kind) => { if (data[kind]) window.currentBlueprintVersions[kind] = data[kind].version; });
@@ -664,7 +684,8 @@ function renderBlueprintEmpty() {
 
 function renderBlueprint(kind = "characters") {
   document.querySelectorAll(".blueprint-tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.blueprint === kind));
-  if (!blueprintHasData && currentBook()) {
+  // 无真实数据（含未打开作品）时只渲染空状态，绝不展示顶层演示条目。
+  if (!blueprintHasData) {
     renderBlueprintEmpty();
     return;
   }

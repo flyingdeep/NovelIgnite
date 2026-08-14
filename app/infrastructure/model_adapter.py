@@ -39,6 +39,28 @@ class ModelAdapter(Protocol):
     def complete(self, messages: list[dict[str, str]], *, temperature: float = 0.7, reasoning_strength: str = "medium", json_mode: bool = False, max_tokens: int | None = None, action: str = "chat") -> str: ...
 
 
+# 模型拒绝生成时常见的中文/英文表达（用于把「返回非 JSON 的拒绝文本」归类为内容策略拒绝）。
+_REFUSAL_HINTS = (
+    "抱歉", "无法生成", "无法满足", "无法创作", "无法完成", "不能生成", "不能创作", "无法提供", "无法处理",
+    "不予", "拒绝", "不适合", "不允许", "敏感内容", "成人内容", "内容政策", "内容策略", "安全审查",
+    "违反", "违反政策", "合规要求", "sorry", "cannot generate", "can't generate", "cannot create",
+    "not able to", "not allowed", "unable to", "refus", "decline", "content policy",
+    "content filter", "moderation", "inappropriate", "explicit", "unsafe", "harmful",
+)
+
+
+class ContentPolicyRefusalError(ValueError):
+    """模型返回了合规性拒绝文本（非 JSON），用于可观测性归类。
+
+    与 JSONDecodeError 不同，此类异常表明失败真实原因是模型安全/内容策略拒绝，
+    而非输出格式错误；snippet 保存脱敏后的回复开头以便排查。
+    """
+
+    def __init__(self, snippet: str):
+        self.snippet = snippet
+        super().__init__("Model returned a content-policy refusal instead of JSON")
+
+
 def extract_json(text: str) -> Any:
     cleaned = text.strip()
     if cleaned.startswith("```"):
@@ -49,6 +71,11 @@ def extract_json(text: str) -> Any:
         start, end = cleaned.find("{"), cleaned.rfind("}")
         if start >= 0 and end > start:
             return json.loads(cleaned[start : end + 1])
+        # 解析失败：若原始回复是明显的合规性拒绝文本，归类为内容策略拒绝而非格式错误
+        low = cleaned.lower()
+        if any(h in low for h in _REFUSAL_HINTS):
+            snippet = "".join(ch for ch in cleaned if ch.isprintable()).strip()[:200]
+            raise ContentPolicyRefusalError(snippet) from None
         raise
 
 
@@ -91,7 +118,12 @@ def _classify_error(exc: Exception) -> dict[str, Any]:
         detail = detail[:300]
 
     category = "other"
-    if error_type in ("APITimeoutError", "Timeout", "ReadTimeout", "ConnectTimeout"):
+    if isinstance(exc, ContentPolicyRefusalError):
+        category = "content_policy"
+        # snippet（脱敏回复片段）比默认消息更能说明真实原因，直接覆盖 detail
+        detail = exc.snippet or "Model returned a content-policy refusal instead of JSON"
+        detail = "".join(ch for ch in detail if ch.isprintable()).strip()[:300]
+    elif error_type in ("APITimeoutError", "Timeout", "ReadTimeout", "ConnectTimeout"):
         category = "timeout"
     elif error_type in ("APIConnectionError", "ConnectionError", "ConnectError"):
         category = "connection"
