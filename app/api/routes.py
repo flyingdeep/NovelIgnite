@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.infrastructure.database import get_db
 from app.infrastructure.config import settings
 from app.infrastructure.model_adapter import configured_model_specs
-from app.works.schemas import AIConfigResponse, AIConfigUpdate, IdeaUpdate, ModelResponse, TitleUpdate, WorkCreate, WorkResponse
+from app.works.schemas import AIConfigResponse, AIConfigUpdate, IdeaUpdate, ModelAvailabilityResponse, ModelResponse, TitleUpdate, WorkCreate, WorkResponse
 from app.works.service import create_story, get_ai_config, get_story_or_404, list_stories, soft_delete_story, update_ai_config, update_idea, update_title
 from app.works.concept_schemas import ConceptConfirm, ConceptGenerationRequest, ConceptUpdate
 from app.works.concept_service import confirm_concept, concept_response, generate_concept, latest_concept, update_concept
@@ -111,6 +111,14 @@ def put_story_ai_config(story_id: str, payload: AIConfigUpdate, db: Session = De
 @router.get("/models", response_model=list[ModelResponse])
 def get_models():
     return [ModelResponse(provider=s.provider, name=s.name, model=s.model, supports_json=s.supports_json, configured=bool(os.getenv(s.api_key_env) or getattr(settings, s.api_key_env.lower(), ""))) for s in configured_model_specs()]
+
+
+@router.get("/models/availability", response_model=list[ModelAvailabilityResponse])
+def get_models_availability():
+    """模型可用性异步探测：Ollama 真实网络探测（远程服务器可能关机），其余按 API Key 是否配置。"""
+    from app.infrastructure.model_adapter import check_model_availability
+
+    return [ModelAvailabilityResponse(**check_model_availability(s)) for s in configured_model_specs()]
 
 
 @router.get("/stories/{story_id}/concept")

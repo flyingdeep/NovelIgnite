@@ -384,6 +384,8 @@ let generatedBeat = false;
 let toastTimer;
 let aiConfig = { model: "DeepSeek V4 Flash", temperature: 0.7, reasoning: "medium", version: 1 };
 let blueprintHasData = false;
+// 模型可用性探测结果（[{provider,name,model,available,reason,latency_ms}]）；null = 尚未探测
+let modelAvailability = null;
 // Phase 5 workspace state: real API context when available
 let currentWorkspaceContext = null;
 let currentActiveChapterId = null;
@@ -916,6 +918,56 @@ function openConfig() {
   apply(aiConfig);
   if (apiAvailable && book) {
     apiRequest(`/stories/${book.id}/ai-config`).then(apply).catch(() => {});
+  }
+  // 模型可用性：未探测过则异步加载，否则按最新结果重建下拉（不可用模型置为禁用）
+  if (modelAvailability === null) {
+    loadModelAvailability();
+  } else {
+    populateModelSelect(true);
+  }
+}
+
+async function loadModelAvailability() {
+  if (!apiAvailable) {
+    modelAvailability = [];
+    populateModelSelect();
+    return;
+  }
+  try {
+    const list = await apiRequest("/models/availability", { timeoutMs: 10000 });
+    modelAvailability = Array.isArray(list) ? list : [];
+  } catch (error) {
+    modelAvailability = [];
+  }
+  populateModelSelect();
+}
+
+// 用探测结果重建 #config-model 下拉；不可用模型 disabled；当前模型不可用时回退到首个可用项
+function populateModelSelect(notify = false) {
+  const select = document.querySelector("#config-model");
+  if (!select) return;
+  const current = aiConfig.model;
+  const specs = modelAvailability && modelAvailability.length
+    ? modelAvailability
+    : [
+        { provider: "deepseek", name: "DeepSeek V4 Flash", available: true },
+        { provider: "agnes", name: "Agnes 2.5 Flash", available: true },
+        { provider: "grok", name: "Grok 4.5", available: true },
+        { provider: "ollama", name: "Qwen3.6 Abliterated 27B (Ollama)", available: true },
+      ];
+  select.replaceChildren(...specs.map((m) => {
+    const opt = document.createElement("option");
+    opt.value = m.name;
+    opt.textContent = m.available ? m.name : `${m.name}（离线 · 不可用）`;
+    opt.disabled = !m.available;
+    return opt;
+  }));
+  const enabled = specs.filter((m) => m.available).map((m) => m.name);
+  if (enabled.includes(current)) {
+    select.value = current;
+  } else if (enabled.length) {
+    select.value = enabled[0];
+    if (notify) toast(`模型「${current}」当前不可用，已回退到「${enabled[0]}」。`);
   }
 }
 
@@ -2012,9 +2064,10 @@ function renderModels() {
   const models = [
     ["DeepSeek V4 Flash", "OpenAI Chat Completions compatible · 适合快速结构化规划与正文生成", "https://api.deepseek.com", "运行正常 · 842ms"],
     ["Agnes 2.5 Flash", "OpenAI Chat Completions compatible · 适合结构化候选与一致性检查", "https://apihub.agnes-ai.com", "运行正常 · 713ms"],
-    ["Grok 4.5", "OpenAI Chat Completions compatible · 用于高探索性候选；不要求结构化响应格式", "https://modelflare.dev", "尚未测试"]
+    ["Grok 4.5", "OpenAI Chat Completions compatible · 用于高探索性候选；不要求结构化响应格式", "https://modelflare.dev", "尚未测试"],
+    ["Qwen3.6 Abliterated 27B (Ollama)", "远端 Ollama · OpenAI 兼容 · 推理默认开启（reasoning_effort），适合高探索性创作", "http://106.75.216.144:11434", "页面加载时异步探测 · 离线时自动禁用"]
   ];
-  document.querySelector("#model-cards").innerHTML = models.map(([name, description, endpoint, status], index) => `<article class="model-card"><div><h3>${name} <span class="tag green">已启用</span></h3><p>${description}</p><small>${endpoint} · API Key: 服务端环境变量</small></div><div class="model-card-actions"><button class="secondary-button test-model" type="button" data-model="${name}" data-index="${index}">测试配置</button><button class="icon-button" type="button" aria-label="编辑 ${name}" data-toast="真实实现应编辑服务端模型配置，前端仅显示脱敏状态。">⚙</button></div><div class="test-result" data-result="${index}" ${index === 2 ? "hidden" : ""}>✓ ${status} · 返回结构化候选验证通过</div></article>`).join("");
+  document.querySelector("#model-cards").innerHTML = models.map(([name, description, endpoint, status], index) => `<article class="model-card"><div><h3>${name} <span class="tag green">已启用</span></h3><p>${description}</p><small>${endpoint} · API Key: 服务端环境变量（Ollama 无鉴权）</small></div><div class="model-card-actions"><button class="secondary-button test-model" type="button" data-model="${name}" data-index="${index}">测试配置</button><button class="icon-button" type="button" aria-label="编辑 ${name}" data-toast="真实实现应编辑服务端模型配置，前端仅显示脱敏状态。">⚙</button></div><div class="test-result" data-result="${index}" ${index === 2 || index === 3 ? "hidden" : ""}>✓ ${status} · 返回结构化候选验证通过</div></article>`).join("");
   document.querySelectorAll(".test-model").forEach((button) => button.addEventListener("click", () => {
     button.disabled = true;
     button.textContent = "测试中…";
@@ -2031,6 +2084,7 @@ function renderModels() {
 
 async function bootstrap() {
   await loadWorksFromApi();
+  loadModelAvailability(); // 异步探测模型可用性（Ollama 远程服务器可能离线），不可用模型会置为禁用
   renderBlueprint();
   renderBooks();
   renderChapters();

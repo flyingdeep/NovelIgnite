@@ -26,12 +26,17 @@ class ModelSpec:
     thinking: str = "builtin"
     # 官方允许的最大输出 tokens（DeepSeek 384K / Agnes 2.5 65.5K / Grok 4.5 500K）
     max_output_tokens: int = 4096
+    # 单次请求超时（秒）；None 时使用 settings.model_timeout。Ollama 远端模型慢，需更长超时
+    timeout: float | None = None
 
 
 MODEL_SPECS = (
     ModelSpec("agnes", "Agnes 2.5 Flash", "agnes-2.5-flash", "https://apihub.agnes-ai.com/v1", "AGNES_API_KEY", True, "agnes", 65536),
     ModelSpec("deepseek", "DeepSeek V4 Flash", "deepseek-v4-flash", "https://api.deepseek.com/v1", "DEEPSEEK_API_KEY", True, "deepseek", 384000),
     ModelSpec("grok", "Grok 4.5", "grok-4.5", "https://modelflare.dev/v1", "GROK_API_KEY", False, "grok", 500000),
+    # 远端 Ollama（通常无鉴权）：Qwen3 系推理默认开启，reasoning_effort 为顶层参数；JSON 模式可用。
+    # timeout=300：远端 27B 推理较慢（思考占用大量时间），默认 150s 会超时
+    ModelSpec("ollama", "Qwen3.6 Abliterated 27B (Ollama)", "huihui_aiQwen3.6-abliterated-27b:latest", "http://106.75.216.144:11434/v1", "OLLAMA_API_KEY", True, "ollama", 65536, timeout=300),
 )
 
 
@@ -166,7 +171,11 @@ class OpenAICompatibleAdapter:
 
         api_key = os.getenv(self.spec.api_key_env) or getattr(settings, self.spec.api_key_env.lower(), "")
         if not api_key:
-            raise RuntimeError(f"Missing model API key: {self.spec.api_key_env}")
+            if self.spec.provider == "ollama":
+                # Ollama 通常无鉴权，OpenAI SDK 需要非空占位
+                api_key = "ollama"
+            else:
+                raise RuntimeError(f"Missing model API key: {self.spec.api_key_env}")
         if max_tokens is None:
             max_tokens = self.spec.max_output_tokens
         client = OpenAI(base_url=self.spec.base_url, api_key=api_key, timeout=self.timeout)
@@ -187,12 +196,31 @@ class OpenAICompatibleAdapter:
         elif self.spec.thinking == "grok":
             # Grok 4.5：推理无法关闭，reasoning_effort 为顶层参数（low/medium/high）
             kwargs["reasoning_effort"] = reasoning_strength
+        elif self.spec.thinking == "ollama":
+            # Qwen3（Ollama）：推理默认开启无法关闭，reasoning_effort 为顶层参数（low/medium/high）
+            kwargs["reasoning_effort"] = reasoning_strength
         if extra_body:
             kwargs["extra_body"] = extra_body
         if json_mode and self.spec.supports_json:
             kwargs["response_format"] = {"type": "json_object"}
         start = time.perf_counter()
         try:
+            if self.spec.provider == "ollama":
+                # 远端 Ollama 走公网：非流式长请求会被链路空闲超时（约 60s）掐断；
+                # 改用流式让数据持续流动，绕过链路超时，也利于边生成边返回
+                kwargs["stream"] = True
+                stream = client.chat.completions.create(**kwargs)
+                parts: list[str] = []
+                for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    if delta and delta.content:
+                        parts.append(delta.content)
+                text = "".join(parts)
+                duration_ms = (time.perf_counter() - start) * 1000
+                record_generation(action, self.spec.provider, succeeded=True, duration_ms=duration_ms)
+                return text
             response = client.chat.completions.create(**kwargs)
             duration_ms = (time.perf_counter() - start) * 1000
             usage = getattr(response, "usage", None)
@@ -216,10 +244,39 @@ def configured_model_specs() -> list[ModelSpec]:
 
 
 def build_adapters(timeout: float | None = None) -> dict[str, OpenAICompatibleAdapter]:
-    if timeout is None:
-        timeout = settings.model_timeout
-    return {
-        spec.provider: OpenAICompatibleAdapter(spec, timeout=timeout)
-        for spec in MODEL_SPECS
-        if os.getenv(spec.api_key_env) or getattr(settings, spec.api_key_env.lower(), "")
-    }
+    adapters: dict[str, OpenAICompatibleAdapter] = {}
+    for spec in MODEL_SPECS:
+        spec_timeout = timeout or spec.timeout or settings.model_timeout
+        if spec.provider == "ollama":
+            # Ollama 通常无鉴权，始终构建（可用性由前端异步探测决定）
+            adapters[spec.provider] = OpenAICompatibleAdapter(spec, timeout=spec_timeout)
+        elif os.getenv(spec.api_key_env) or getattr(settings, spec.api_key_env.lower(), ""):
+            adapters[spec.provider] = OpenAICompatibleAdapter(spec, timeout=spec_timeout)
+    return adapters
+
+
+def check_model_availability(spec: ModelSpec, timeout: float = 4.0) -> dict[str, Any]:
+    """探测单个模型当前是否可用（同步实现，由 FastAPI 在线程池执行）。
+
+    返回 {provider, name, model, available, reason, latency_ms}：
+    - ollama: 真实 GET {base_url}/models（OpenAI 兼容模型列表）；服务器在线且模型已下载即认为可用，
+      网络不可达/超时/非 200 均视为不可用（远程服务器可能关机）
+    - 其他: 以 API Key 是否配置为准（configured），不发起网络探测，避免拖慢页面加载
+    """
+    base = {"provider": spec.provider, "name": spec.name, "model": spec.model}
+    if spec.provider != "ollama":
+        key = os.getenv(spec.api_key_env) or getattr(settings, spec.api_key_env.lower(), "")
+        return {**base, "available": bool(key), "reason": "configured" if key else "missing_api_key", "latency_ms": 0.0}
+    import httpx
+
+    start = time.perf_counter()
+    try:
+        r = httpx.get(f"{spec.base_url}/models", timeout=timeout)
+        latency_ms = (time.perf_counter() - start) * 1000
+        if r.status_code == 200:
+            ids = [m.get("id", "") for m in r.json().get("data", [])]
+            return {**base, "available": True, "reason": "online" if spec.model in ids else "online_model_unlisted", "latency_ms": latency_ms}
+        return {**base, "available": False, "reason": f"http_{r.status_code}", "latency_ms": latency_ms}
+    except Exception as exc:  # noqa: BLE001
+        latency_ms = (time.perf_counter() - start) * 1000
+        return {**base, "available": False, "reason": type(exc).__name__, "latency_ms": latency_ms}

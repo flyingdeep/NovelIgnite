@@ -54,3 +54,12 @@ class ModelResponse(BaseModel):
     model: str
     supports_json: bool
     configured: bool
+
+
+class ModelAvailabilityResponse(BaseModel):
+    provider: str
+    name: str
+    model: str
+    available: bool
+    reason: str = ""
+    latency_ms: float = 0

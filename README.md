@@ -52,16 +52,19 @@ py -3.13 -m uvicorn app.main:app --reload
 
 ## 模型接入
 
-三种模型均使用 OpenAI Python SDK + Chat Completions：
+四种模型均使用 OpenAI Python SDK + Chat Completions：
 
 | 提供方 | Base URL | 默认模型 | 环境变量 | JSON 说明 |
 |---|---|---|---|---|
 | Agnes | `https://apihub.agnes-ai.com/v1` | `agnes-2.5-flash` | `AGNES_API_KEY` | 支持 `response_format`；思考模式经 `chat_template_kwargs.enable_thinking` 开启 |
 | DeepSeek | `https://api.deepseek.com/v1` | `deepseek-v4-flash` | `DEEPSEEK_API_KEY` | 可尝试 JSON 模式；思考模式默认开启，`extra_body.thinking` + 顶层 `reasoning_effort` |
 | Grok | `https://modelflare.dev/v1` | `grok-4.5` | `GROK_API_KEY` | 不发送 `response_format`，自动容错解析；推理内置，顶层 `reasoning_effort` |
+| Ollama（远端） | `http://106.75.216.144:11434/v1` | `huihui_aiQwen3.6-abliterated-27b:latest` | `OLLAMA_API_KEY`（可选，通常无鉴权） | 支持 `response_format`；Qwen3 推理默认开启，顶层 `reasoning_effort`；**始终以流式请求**（绕开公网链路对非流式长请求的 ~60s 空闲断连） |
 
-- 推理强度（low/medium/high）按各模型官方文档传递：DeepSeek 顶层 `reasoning_effort`（medium 映射 high）、Agnes `chat_template_kwargs.enable_thinking`、Grok 顶层 `reasoning_effort`。
-- 各模型最大输出按官方上限：Agnes 2.5 65.5K / DeepSeek v4-flash 384K / Grok 4.5 500K；生成调用默认使用该上限。
+- 推理强度（low/medium/high）按各模型官方文档传递：DeepSeek 顶层 `reasoning_effort`（medium 映射 high）、Agnes `chat_template_kwargs.enable_thinking`、Grok 顶层 `reasoning_effort`、Ollama（Qwen3）顶层 `reasoning_effort`（推理默认开启）。
+- 各模型最大输出按官方上限：Agnes 2.5 65.5K / DeepSeek v4-flash 384K / Grok 4.5 500K / Ollama 65.5K；生成调用默认使用该上限。
+- **模型可用性异步探测**：`GET /api/v1/models/availability` 返回每个模型的可用状态——Ollama 做真实网络探测（`GET {base}/models`，服务器离线则 `available=false`），其余按 API Key 是否配置判断；前端页面加载时异步调用，**不可用模型在生成设置下拉中置为禁用**（Ollama 离线时显示「离线 · 不可用」）。
+- Ollama 单次请求超时 300s（远端 27B 推理较慢），其余模型沿用全局超时；Ollama 无鉴权，始终构建适配器（是否可用由探测决定）。
 
 - `.env` 只在服务端读取，不能提交到 Git。
 - 模型、Temperature 和推理强度可以通过作品级 AI 配置保存。
@@ -130,7 +133,7 @@ py -3.13 -m alembic upgrade head
 py -3.13 -m pytest -q
 ```
 
-当前回归结果：**54 passed（单元/集成）＋ 13 passed（E2E）**。覆盖作品库、Idea 锁定、AI 配置、三模型适配（含思考/推理参数与官方 max token）、Concept 候选/确认与卖点规范化、Blueprint 四分类全条目渲染、Living State 初始投影、Chapter Plan 逐章激活与锁定章节保护、标题生成、可观测性指标（Phase 1–4）；Chapter Workspace 快照/上下文、Scene / Beat 规划与乐观锁、正文自动应用与版本追溯、Chapter Delta 确认（含完整性校验）、缺失正文补全、Living State 版本递增、一致性检查、全书阅读模式数据（Phase 5–6）；以及 AI 驱动 Delta 提取、AI 一致性发现、Scene Summary 生成与前置摘要注入、逐个 Beat 生成自动完结场景（Phase 6 增强）、内容策略拒绝文本识别（`ContentPolicyRefusalError`）、蓝图缺失自愈与演示数据清理；Playwright 端到端（E2E）覆盖作品库→创意→概念→蓝图→章节→工作台正文编辑/生成→阅读模式全流程。
+当前回归结果：**61 passed（单元/集成）＋ 13 passed（E2E）**。覆盖作品库、Idea 锁定、AI 配置、四模型适配（含思考/推理参数、官方 max token 与 Ollama 流式）、Concept 候选/确认与卖点规范化、Blueprint 四分类全条目渲染、Living State 初始投影、Chapter Plan 逐章激活与锁定章节保护、标题生成、可观测性指标（Phase 1–4）；Chapter Workspace 快照/上下文、Scene / Beat 规划与乐观锁、正文自动应用与版本追溯、Chapter Delta 确认（含完整性校验）、缺失正文补全、Living State 版本递增、一致性检查、全书阅读模式数据（Phase 5–6）；以及 AI 驱动 Delta 提取、AI 一致性发现、Scene Summary 生成与前置摘要注入、逐个 Beat 生成自动完结场景（Phase 6 增强）、内容策略拒绝文本识别（`ContentPolicyRefusalError`）、蓝图缺失自愈与演示数据清理、模型可用性异步探测与离线禁用；Playwright 端到端（E2E）覆盖作品库→创意→概念→蓝图→章节→工作台正文编辑/生成→阅读模式全流程。
 
 E2E 运行方式（建议使用无 API Key 的独立服务器走确定性回退，快速稳定）：
 

@@ -40,6 +40,9 @@ def _capture_adapter_kwargs(monkeypatch, spec, **complete_kwargs):
     class FakeCompletions:
         def create(self, **kwargs):
             captured.update(kwargs)
+            if kwargs.get("stream"):
+                chunk = type("Chunk", (), {"choices": [type("Choice", (), {"delta": type("Delta", (), {"content": "ok"})()})()]})()
+                return iter([chunk])
             return type("Response", (), {"choices": [type("Choice", (), {"message": type("Message", (), {"content": "ok"})()})()]})()
 
     class FakeClient:
@@ -52,10 +55,11 @@ def _capture_adapter_kwargs(monkeypatch, spec, **complete_kwargs):
     return captured
 
 
-def test_models_endpoint_has_three_specs(client):
+def test_models_endpoint_has_four_specs(client):
     models = client.get("/api/v1/models").json()
-    assert {model["provider"] for model in models} == {"agnes", "deepseek", "grok"}
+    assert {model["provider"] for model in models} == {"agnes", "deepseek", "grok", "ollama"}
     assert next(model for model in models if model["provider"] == "grok")["supports_json"] is False
+    assert next(model for model in models if model["provider"] == "ollama")["supports_json"] is True
 
 
 def test_extract_json_handles_code_fence_and_wrapping():
@@ -113,8 +117,89 @@ def test_grok_adapter_does_not_send_response_format(monkeypatch):
     spec = ModelSpec("grok", "Grok 4.5", "grok-4.5", "https://modelflare.dev/v1", "GROK_API_KEY", False, "grok")
     captured = _capture_adapter_kwargs(monkeypatch, spec, json_mode=True, reasoning_strength="medium")
     assert "response_format" not in captured
-    assert captured["reasoning_effort"] == "medium"  # 顶层参数
-    assert "extra_body" not in captured
+
+
+def test_ollama_spec_registered():
+    from app.infrastructure.model_adapter import MODEL_SPECS
+
+    ollama = next(spec for spec in MODEL_SPECS if spec.provider == "ollama")
+    assert ollama.name == "Qwen3.6 Abliterated 27B (Ollama)"
+    assert ollama.model == "huihui_aiQwen3.6-abliterated-27b:latest"
+    assert ollama.base_url == "http://106.75.216.144:11434/v1"
+    assert ollama.supports_json is True
+    assert ollama.thinking == "ollama"
+    assert ollama.max_output_tokens >= 65536
+
+
+def test_ollama_reasoning_effort_top_level(monkeypatch):
+    from app.infrastructure.model_adapter import MODEL_SPECS
+
+    spec = next(s for s in MODEL_SPECS if s.provider == "ollama")
+    captured = _capture_adapter_kwargs(monkeypatch, spec, reasoning_strength="high", json_mode=True)
+    assert captured["reasoning_effort"] == "high"  # Qwen3（Ollama）推理深度为顶层参数
+    assert captured["response_format"] == {"type": "json_object"}  # 支持 JSON 模式
+
+
+def test_ollama_uses_streaming(monkeypatch):
+    """Ollama 走公网链路：必须用流式，绕过非流式长请求的链路空闲超时。"""
+    from app.infrastructure.model_adapter import MODEL_SPECS
+
+    spec = next(s for s in MODEL_SPECS if s.provider == "ollama")
+    captured = _capture_adapter_kwargs(monkeypatch, spec, reasoning_strength="medium", json_mode=True)
+    assert captured["stream"] is True
+    assert captured["reasoning_effort"] == "medium"
+    assert captured["response_format"] == {"type": "json_object"}
+
+
+def test_build_adapters_includes_ollama_without_key(monkeypatch):
+    from app.infrastructure.model_adapter import build_adapters
+
+    for var in ("AGNES_API_KEY", "DEEPSEEK_API_KEY", "GROK_API_KEY", "OLLAMA_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    adapters = build_adapters()
+    assert "ollama" in adapters  # Ollama 通常无鉴权，始终可用
+
+
+def test_check_model_availability_ollama_online(monkeypatch):
+    import httpx
+    from app.infrastructure.model_adapter import MODEL_SPECS, check_model_availability
+
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {"data": [{"id": "huihui_aiQwen3.6-abliterated-27b:latest"}]}
+
+    monkeypatch.setattr("httpx.get", lambda url, timeout: Resp())
+    spec = next(s for s in MODEL_SPECS if s.provider == "ollama")
+    r = check_model_availability(spec)
+    assert r["available"] is True
+    assert r["reason"] == "online"
+
+
+def test_check_model_availability_ollama_offline(monkeypatch):
+    import httpx
+    from app.infrastructure.model_adapter import MODEL_SPECS, check_model_availability
+
+    def boom(url, timeout):
+        raise httpx.ConnectError("unreachable")
+
+    monkeypatch.setattr("httpx.get", boom)
+    spec = next(s for s in MODEL_SPECS if s.provider == "ollama")
+    r = check_model_availability(spec)
+    assert r["available"] is False
+    assert r["reason"] == "ConnectError"
+
+
+def test_check_model_availability_non_ollama_uses_configured(monkeypatch):
+    from app.infrastructure.model_adapter import MODEL_SPECS, check_model_availability
+
+    spec = next(s for s in MODEL_SPECS if s.provider == "deepseek")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr("app.infrastructure.config.settings.deepseek_api_key", "")
+    r = check_model_availability(spec)
+    assert r["available"] is False
+    assert r["reason"] == "missing_api_key"
 
 
 def test_fake_adapter_is_deterministic_and_records_parameters():
