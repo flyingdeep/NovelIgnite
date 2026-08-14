@@ -620,8 +620,12 @@ async function loadBlueprintForCurrentStory() {
     }
     window.currentBlueprintVersions = window.currentBlueprintVersions || {};
     if (hasAny) {
+      // 关键：从 API 加载到已有蓝图时必须置位，否则 renderBlueprint 会渲染空状态
+      blueprintHasData = true;
       Object.entries(data).forEach(([kind, artifact]) => { if (artifact && blueprintData[kind]) blueprintPayloadToUi(kind, artifact); });
       ["characters", "world", "timeline", "arc"].forEach((kind) => { if (data[kind]) window.currentBlueprintVersions[kind] = data[kind].version; });
+    } else {
+      blueprintHasData = false;
     }
     const living = data.living_state;
     if (living && living.payload && living.payload.domains) {
