@@ -18,7 +18,7 @@ def test_backend_health():
 
 def test_prototype_served(page):
     """原型页面可访问。"""
-    page.goto("http://127.0.0.1:8000/prototype/")
+    page.goto("http://127.0.0.1:8000/")
     page.wait_for_load_state("networkidle")
     # 检查页面标题包含 Novel Ignite
     expect(page.locator("text=Novel Ignite")).to_be_visible()
@@ -28,7 +28,7 @@ def test_prototype_served(page):
 
 def test_new_work_button(page):
     """作品库页面正常加载（检查页面标题）。"""
-    page.goto("http://127.0.0.1:8000/prototype/")
+    page.goto("http://127.0.0.1:8000/")
     page.wait_for_load_state("networkidle")
     page.wait_for_timeout(2000)
     # 验证页面已加载

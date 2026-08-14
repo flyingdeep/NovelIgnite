@@ -42,7 +42,7 @@ py -3.13 -m uvicorn app.main:app --reload
 
 访问：
 
-- `http://127.0.0.1:8000/prototype/`：当前原型与真实 Phase 1–6 API。
+- `http://127.0.0.1:8000/`：当前原型与真实 Phase 1–6 API（前端挂载于根路径，文件位于 `prototype/`）。
 - `http://127.0.0.1:8000/docs`：Swagger API 文档。
 - `http://127.0.0.1:8000/health`：健康检查。
 

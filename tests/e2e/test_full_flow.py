@@ -64,7 +64,7 @@ class TestConceptGeneration:
 
     def test_generate_concept(self, page, story_id):
         """点击生成概念，等待候选内容填充。"""
-        page.goto(f"http://127.0.0.1:8000/prototype/?v=20260813&story={story_id}&screen=idea")
+        page.goto(f"http://127.0.0.1:8000/?v=20260813&story={story_id}&screen=idea")
         page.locator("#idea-input").fill("一位能听见墙壁心跳的人。")
         page.locator("#generate-concept").click()
         # 等待概念页面加载
@@ -75,7 +75,7 @@ class TestConceptGeneration:
 
     def test_re_generate_concept(self, page, story_id):
         """重新生成概念按钮可用。"""
-        page.goto(f"http://127.0.0.1:8000/prototype/?v=20260813&story={story_id}&screen=concept")
+        page.goto(f"http://127.0.0.1:8000/?v=20260813&story={story_id}&screen=concept")
         btn = page.locator("#re-generate-concept")
         expect(btn).to_be_visible()
         btn.click()
@@ -90,7 +90,7 @@ class TestBlueprintFlow:
 
     def test_generate_blueprint(self, page, story_id):
         """生成蓝图并验证内容分区。"""
-        page.goto(f"http://127.0.0.1:8000/prototype/?v=20260813&story={story_id}&screen=blueprint")
+        page.goto(f"http://127.0.0.1:8000/?v=20260813&story={story_id}&screen=blueprint")
         page.locator("#generate-blueprint").click()
         # 等待蓝图内容出现
         expect(page.locator("#blueprint-content")).to_contain_text("人物", timeout=60000)
@@ -102,7 +102,7 @@ class TestBlueprintFlow:
 
     def test_confirm_blueprint(self, page, story_id):
         """确认蓝图后状态更新。"""
-        page.goto(f"http://127.0.0.1:8000/prototype/?v=20260813&story={story_id}&screen=blueprint")
+        page.goto(f"http://127.0.0.1:8000/?v=20260813&story={story_id}&screen=blueprint")
         page.locator("#generate-blueprint").click()
         expect(page.locator("#blueprint-content")).to_contain_text("人物", timeout=60000)
         page.locator("#confirm-blueprint").click()
@@ -116,7 +116,7 @@ class TestChapterPlanning:
 
     def test_generate_chapters(self, page, story_id):
         """生成章节计划并验证列表。"""
-        page.goto(f"http://127.0.0.1:8000/prototype/?v=20260813&story={story_id}&screen=chapters")
+        page.goto(f"http://127.0.0.1:8000/?v=20260813&story={story_id}&screen=chapters")
         page.locator("#generate-chapter-plan").click()
         # 等待章节卡片出现
         expect(page.locator("#chapter-grid")).to_contain_text("第 1 章", timeout=60000)
@@ -125,7 +125,7 @@ class TestChapterPlanning:
 
     def test_navigate_to_workspace(self, page, story_id):
         """进入工作台。"""
-        page.goto(f"http://127.0.0.1:8000/prototype/?v=20260813&story={story_id}&screen=workspace")
+        page.goto(f"http://127.0.0.1:8000/?v=20260813&story={story_id}&screen=workspace")
         expect(page.locator("#scene-content")).to_be_visible(timeout=10000)
 
 
@@ -134,7 +134,7 @@ class TestModalInteraction:
 
     def test_config_modal(self, page, story_id):
         """打开/关闭生成设置弹窗。"""
-        page.goto(f"http://127.0.0.1:8000/prototype/?v=20260813&story={story_id}&screen=idea")
+        page.goto(f"http://127.0.0.1:8000/?v=20260813&story={story_id}&screen=idea")
         page.locator('[data-config]').click()
         expect(page.locator("#config-modal")).to_be_visible()
         # 修改配置
@@ -146,7 +146,7 @@ class TestModalInteraction:
 
     def test_tips_modal(self, page, story_id):
         """打开/关闭写法提示弹窗。"""
-        page.goto(f"http://127.0.0.1:8000/prototype/?v=20260813&story={story_id}&screen=idea")
+        page.goto(f"http://127.0.0.1:8000/?v=20260813&story={story_id}&screen=idea")
         page.locator("#show-write-tips").click()
         expect(page.locator("#tips-modal")).to_be_visible()
         expect(page.locator("#tips-title")).to_contain_text("如何完整描述一个创意")
@@ -156,7 +156,7 @@ class TestModalInteraction:
 
     def test_help_toast(self, page, story_id):
         """帮助按钮触发 toast。"""
-        page.goto(f"http://127.0.0.1:8000/prototype/?v=20260813&story={story_id}&screen=idea")
+        page.goto(f"http://127.0.0.1:8000/?v=20260813&story={story_id}&screen=idea")
         page.locator('[aria-label="帮助"]').click()
         # toast 短暂显示
         expect(page.locator("[data-toast]")).to_be_visible(timeout=5000)
@@ -167,7 +167,7 @@ class TestNavigation:
 
     def test_stepbar_navigation(self, page, story_id):
         """步骤条导航正常工作。"""
-        page.goto(f"http://127.0.0.1:8000/prototype/?v=20260813&story={story_id}&screen=idea")
+        page.goto(f"http://127.0.0.1:8000/?v=20260813&story={story_id}&screen=idea")
         # 点击「作品库」
         page.locator('[data-nav="works"]').click()
         expect(page.locator("#works")).to_be_visible()
@@ -177,7 +177,7 @@ class TestNavigation:
 
     def test_breadcrumb_updates(self, page, story_id):
         """面包屑跟随当前页面更新。"""
-        page.goto(f"http://127.0.0.1:8000/prototype/?v=20260813&story={story_id}&screen=idea")
+        page.goto(f"http://127.0.0.1:8000/?v=20260813&story={story_id}&screen=idea")
         expect(page.locator("#crumb")).to_contain_text("创意")
         page.locator('[data-nav="concept"]').click()
         expect(page.locator("#crumb")).to_contain_text("概念")

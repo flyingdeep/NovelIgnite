@@ -35,7 +35,7 @@ def create_app() -> FastAPI:
         duration_ms = (time.perf_counter() - start) * 1000
         record_request(request.method, request.url.path, response.status_code, duration_ms)
         # 开发期避免浏览器缓存过期的原型静态资源（app.js/styles.css 频繁迭代）
-        if request.url.path.startswith("/prototype/"):
+        if not request.url.path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -48,10 +48,6 @@ def create_app() -> FastAPI:
 
     app.include_router(api_router, prefix="/api/v1")
 
-    prototype_dir = Path(__file__).resolve().parent.parent / "prototype"
-    if prototype_dir.is_dir():
-        app.mount("/prototype", StaticFiles(directory=str(prototype_dir), html=True), name="prototype")
-
     @app.get("/health")
     async def health_check():
         return {"status": "ok", "version": app.version}
@@ -61,6 +57,14 @@ def create_app() -> FastAPI:
         from app.infrastructure.observability import snapshot
 
         return snapshot()
+
+    # 前端 UI 挂在根路径 / 下，直接访问 http://127.0.0.1:8000/ 即可；
+    # 文件仍组织在 prototype/ 目录，避免污染仓库根目录。
+    # 注意：mount("/") 必须在所有 API/health/metrics 路由之后注册，
+    # 否则会拦截这些路径。docs/openapi.json 由 FastAPI 在应用初始化时注册，不受影响。
+    prototype_dir = Path(__file__).resolve().parent.parent / "prototype"
+    if prototype_dir.is_dir():
+        app.mount("/", StaticFiles(directory=str(prototype_dir), html=True), name="prototype")
 
     return app
 
