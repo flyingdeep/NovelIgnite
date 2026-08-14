@@ -83,8 +83,8 @@
 
 <section id="workflow"><h2>05 · 工作流、检查点与失效处理</h2>
 <h3>六步作者流程</h3>
-<div class="flow"><span>作品库</span><span>创意</span><span>概念</span><span>蓝图</span><span>章节</span><span>工作台</span></div>
-<p style="color:var(--m);font-size:13px;margin-top:8px">作品库为入口（多故事管理）；进入故事后显示创意→工作台 5 步；创意页在概念生成后锁定为只读。</p>
+<div class="flow"><span>作品库</span><span>创意</span><span>概念</span><span>蓝图</span><span>章节</span><span>工作台</span><span>阅读</span></div>
+<p style="color:var(--m);font-size:13px;margin-top:8px">作品库为入口（多故事管理）；进入故事后显示创意→工作台 5 步；创意页在概念生成后锁定为只读；全书完结（确认最后一章 Delta）后进入阅读模式，已完成作品从作品库直接进入阅读。</p>
 
 <h3 style="margin-top:22px">章节写作主流程</h3>
 <div class="flow"><span>激活当前章</span><span>构建 Chapter Context</span><span>确认 Scene Plan</span><span>确认 Beat Plan</span><span>顺序生成正文</span><span>确认 Chapter Delta</span><span>更新 Living State</span><span>激活下一章</span></div>
@@ -96,8 +96,8 @@
 <li>若已有部分正文，执行器从最后一个已应用 Beat 继续。</li>
 <li>重新生成只允许当前或已生成 Beat；生成后创建新正文版本并触发后续影响分析。</li></ol></article>
 <article class="card"><h3>逐级检查点</h3><table><tbody>
-<tr><td><b>Beat 完成</b></td><td>提取局部事实候选，检查知识/地点/物品/关系/世界规则；更新当前 Scene 临时上下文。</td></tr>
-<tr><td><b>Scene 完成</b></td><td>合并 Beat 候选为 Scene Delta，生成 Scene Summary，检查是否需修订后续计划。</td></tr>
+<tr><td><b>Beat 完成</b></td><td>AI 驱动的 Delta 提取：模型基于本章入口快照从正文提取角色/世界/时间线变化（失败回退确定性规则），并输出一致性发现（与快照矛盾、时间线冲突、已确认事实违背）；确定性规则（过短/占位标记）始终叠加；全部作为 proposed 候选与提醒，不自动覆盖作者事实。</td></tr>
+<tr><td><b>Scene 完成</b></td><td>合并 Beat 候选为 Scene Delta；生成 Scene Summary（模型失败回退正文片段），工作台/阅读模式展示，并注入后续场景生成提示保持剧情连贯（修订后续计划）。</td></tr>
 <tr><td><b>Chapter 完成</b></td><td>合并 Scene Delta 为 Chapter Delta；作者确认后更新 Story State / Living State 与后序雏形。</td></tr></tbody></table></article></div>
 
 <h3 style="margin-top:22px">Blueprint 更新边界</h3>
@@ -141,8 +141,11 @@
 <tr><td><code>GET /stories/{id}/chapters</code></td><td>读取章节卡片地图</td><td>plan_status、access_status、progress、stale_reason</td></tr>
 <tr><td><code>PUT /chapters/{id}/plan</code></td><td>确认 Chapter Event / Scene / Beat Plan</td><td>只能操作 active Chapter</td></tr>
 <tr><td><code>POST /chapters/{id}/generations</code></td><td>生成当前 Scene 或本章剩余</td><td>action ∈ generate_scene/generate_chapter_remaining</td></tr>
-<tr><td><code>POST /beats/{id}/prose-versions</code></td><td>应用 Beat 正文</td><td>markdown、expected_version；追加版本</td></tr>
-<tr><td><code>GET /chapters/{id}/context</code></td><td>读取 Chapter Context</td><td>Snapshot、Events、来源、stale</td></tr>
+<tr><td><code>POST /scenes/{id}/generations</code> <span class="new">UPDATED</span></td><td>场景/节拍粒度生成</td><td>action ∈ scene-plan/beat-plan/generate_scene/generate_beat/regenerate_beat；逐个 generate_beat 时最后一个 Beat 应用即自动完结场景并生成摘要</td></tr>
+<tr><td><code>POST /chapters/{id}/backfill</code> <span class="new">NEW</span></td><td>补全历史章节缺失正文</td><td>使用章节入口快照，不引入后章状态；补全后标记后续章节 stale</td></tr>
+<tr><td><code>POST /beats/{id}/prose-versions</code> <span class="new">UPDATED</span></td><td>应用 Beat 正文（作者可在工作台直接编辑后应用）</td><td>markdown、applied_by(ai/author)、expected_version；追加版本；应用后创建候选 Delta 并跑一致性检查</td></tr>
+<tr><td><code>GET /stories/{id}/read</code> <span class="new">NEW</span></td><td>全书阅读模式</td><td>全部章节 + 场景 + 已应用正文 + Scene Summary；作为第 6 步结算画面</td></tr>
+<tr><td><code>GET /chapters/{id}/context</code></td><td>读取 Chapter Context</td><td>Snapshot、Events、Scenes（含 summary）、Beats、stale</td></tr>
 <tr><td><code>POST /deltas/{id}/confirm</code></td><td>确认 Chapter Delta</td><td>更新 Story State / Living State，激活下一章</td></tr>
 <tr><td><code>GET /issues</code></td><td>读取一致性问题</td><td>按 checkpoint/chapter/severity 筛选</td></tr></tbody></table></section>
 

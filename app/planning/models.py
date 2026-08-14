@@ -85,6 +85,7 @@ class Scene(Base):
     key_events: Mapped[str] = mapped_column(Text, default="")
     scene_result: Mapped[str] = mapped_column(Text, default="")
     chapter_goal_relation: Mapped[str] = mapped_column(Text, default="")
+    summary: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(30), default="planned")
     version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

@@ -330,3 +330,119 @@ def test_mark_subsequent_stale_after_historical_change(client, monkeypatch, tmp_
             if snapshot is not None:
                 assert snapshot.status == "stale"
             assert "重算" in (later.stale_reason or "")
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 enhancement: AI-driven delta extraction, scene summary, consistency
+# ---------------------------------------------------------------------------
+
+class DispatchAdapter(FakeModelAdapter):
+    """Returns a canned response per model action (action-aware fake)."""
+
+    def __init__(self, responses: dict):
+        self.responses = responses
+        self.calls: list[dict] = []
+
+    def complete(self, messages, *, temperature=0.7, reasoning_strength="medium", json_mode=False, max_tokens=4096, action="chat"):
+        self.calls.append({"action": action, "messages": messages})
+        return self.responses.get(action, self.responses.get("default", PROSE_TEXT))
+
+
+EMPTY_EXTRACT = '{"character_changes":[],"world_changes":[],"timeline_changes":[]}'
+
+
+def _ai_phase6_adapter(scene_summary="林墨在旧港接下匿名委托，开始追查样本来源。", findings="[]"):
+    return DispatchAdapter({
+        "generate_scene": PROSE_TEXT,
+        "extract_delta": EMPTY_EXTRACT,
+        "consistency_check": findings,
+        "scene_summary": scene_summary,
+    })
+
+
+def test_ai_delta_extraction_derives_changes(client, monkeypatch):
+    """AI extraction returns character/world/timeline changes that land in the delta."""
+    changes_json = json.dumps({
+        "character_changes": [{"name": "林墨", "fields": {"status": "接下匿名委托"}}],
+        "world_changes": [{"name": "鉴定所", "fields": {"found": "无署名纸条"}}],
+        "timeline_changes": [{"event": "发现纸条", "scene": "场景甲", "note": "开端"}],
+    }, ensure_ascii=False)
+    story_id, chapter, scenes = _setup_chapter_with_scenes(client, monkeypatch)
+    adapter = DispatchAdapter({
+        "generate_scene": PROSE_TEXT,
+        "extract_delta": changes_json,
+        "consistency_check": "[]",
+        "scene_summary": "摘要",
+    })
+    monkeypatch.setattr("app.planning.writing_service.build_adapters", lambda: {"deepseek": adapter})
+    scene = scenes[0]
+    client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/generations", json={"action": "generate_scene"})
+    deltas = client.get(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/deltas").json()
+    beat_deltas = [d for d in deltas if d["scope_type"] == "beat"]
+    assert beat_deltas
+    changes = beat_deltas[0]["changes"]
+    assert changes["character_changes"][0]["name"] == "林墨"
+    assert changes["character_changes"][0]["fields"]["status"] == "接下匿名委托"
+    assert changes["world_changes"][0]["name"] == "鉴定所"
+    assert changes["timeline_changes"][0]["event"] == "发现纸条"
+
+
+def test_scene_completion_generates_scene_summary(client, monkeypatch):
+    """A completed scene gets an AI scene summary, exposed in context + reader."""
+    summary_text = "林墨在旧港接下匿名委托，开始追查样本来源。"
+    story_id, chapter, scenes = _setup_chapter_with_scenes(client, monkeypatch)
+    monkeypatch.setattr("app.planning.writing_service.build_adapters", lambda: {"deepseek": _ai_phase6_adapter(scene_summary=summary_text)})
+    scene = scenes[0]
+    client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/generations", json={"action": "generate_scene"})
+    # Scene completed and carries a summary.
+    context = client.get(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/context").json()
+    scene0 = context["scenes"][0]
+    assert scene0["status"] == "completed"
+    assert scene0["summary"] == summary_text
+    # Reader mode exposes the summary too.
+    reader = client.get(f"/api/v1/stories/{story_id}/read").json()
+    assert reader["chapters"][0]["scenes"][0]["summary"] == summary_text
+
+
+def test_ai_consistency_check_records_model_findings(client, monkeypatch):
+    """AI consistency findings are persisted as issues alongside deterministic rules."""
+    findings = json.dumps([{"rule": "timeline_conflict", "severity": "error", "evidence": "正文事件与快照时间线矛盾"}], ensure_ascii=False)
+    story_id, chapter, scenes = _setup_chapter_with_scenes(client, monkeypatch)
+    monkeypatch.setattr("app.planning.writing_service.build_adapters", lambda: {"deepseek": _ai_phase6_adapter(findings=findings)})
+    scene = scenes[0]
+    client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/generations", json={"action": "generate_scene"})
+    issues = client.get(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/issues").json()
+    assert any(i["rule"] == "timeline_conflict" and i["severity"] == "error" for i in issues)
+
+
+def test_later_scene_prompt_includes_prior_scene_summary(client, monkeypatch):
+    """Scene 2's generation prompt includes scene 1's summary for continuity."""
+    summary_text = "前置场景摘要内容"
+    story_id, chapter, scenes = _setup_chapter_with_scenes(client, monkeypatch)
+    adapter = _ai_phase6_adapter(scene_summary=summary_text)
+    monkeypatch.setattr("app.planning.writing_service.build_adapters", lambda: {"deepseek": adapter})
+    client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/generations", json={"action": "generate_chapter_remaining"})
+    gen_calls = [c for c in adapter.calls if c["action"] == "generate_scene"]
+    assert len(gen_calls) >= 2, "章节应包含至少两个场景的生成调用"
+    joined = "\n".join(str(c["messages"]) for c in gen_calls[1:])
+    assert summary_text in joined
+
+
+def test_generate_beat_by_beat_completes_scene_with_summary(client, monkeypatch):
+    """UI 逐个 generate_beat 生成完整场景后：场景完成且生成摘要。"""
+    summary_text = "逐个节拍生成后的场景摘要"
+    story_id, chapter, scenes = _setup_chapter_with_scenes(client, monkeypatch)
+    monkeypatch.setattr("app.planning.writing_service.build_adapters", lambda: {"deepseek": _ai_phase6_adapter(scene_summary=summary_text)})
+    scene = scenes[0]
+    context = client.get(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/context").json()
+    beats = context["scenes"][0]["beats"]
+    # 逐个 generate_beat（模拟工作台 UI 的逐个生成流程）。
+    for beat in beats:
+        r = client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/generations", json={"action": "generate_beat", "beat_id": beat["id"]})
+        assert r.status_code == 200, r.text
+    # 场景完成且摘要已生成。
+    context2 = client.get(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/context").json()
+    scene0 = context2["scenes"][0]
+    assert scene0["status"] == "completed"
+    assert scene0["summary"] == summary_text
+

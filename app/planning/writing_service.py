@@ -112,11 +112,12 @@ def apply_beat_prose(db: Session, story_id: str, chapter_id: str, scene_id: str,
     db.flush()
     # Checkpoint: author-applied prose also produces a proposed beat delta + consistency check,
     # so confirming the chapter projects real state changes into the next Living State version.
-    create_beat_delta(db, story_id, chapter, scene, beat, pv)
-    run_consistency_check(db, story_id, chapter, scene, beat, pv, checkpoint="beat")
+    config = get_ai_config(db, story_id)
+    create_beat_delta(db, story_id, chapter, scene, beat, pv, config)
+    run_consistency_check(db, story_id, chapter, scene, beat, pv, checkpoint="beat", config=config)
     db.commit()
     db.refresh(pv)
-    _complete_scene_if_done(db, scene)
+    _complete_scene_if_done(db, scene, config)
     return pv
 
 
@@ -124,10 +125,18 @@ def apply_beat_prose(db: Session, story_id: str, chapter_id: str, scene_id: str,
 # Context & generation helpers
 # ---------------------------------------------------------------------------
 
-def _build_generation_messages(chapter: Chapter, scene: Scene, beat: Beat, snapshot_state: dict[str, Any], prior_prose: str) -> list[dict[str, str]]:
+def _build_generation_messages(db: Session, chapter: Chapter, scene: Scene, beat: Beat, snapshot_state: dict[str, Any], prior_prose: str) -> list[dict[str, str]]:
+    # Revise later plans: include summaries of earlier completed scenes so the
+    # current beat builds on what already happened (Scene Summary feature).
+    earlier_scenes = list(db.scalars(select(Scene).where(Scene.chapter_id == chapter.id, Scene.ordinal < scene.ordinal).order_by(Scene.ordinal)))
+    summaries = []
+    for earlier in earlier_scenes:
+        if earlier.summary:
+            summaries.append(f"Scene {earlier.ordinal}「{earlier.title or ''}」：{earlier.summary}")
+    prior_scenes_block = ("\n".join(summaries) + "\n\n") if summaries else ""
     return [
         {"role": "system", "content": "你是小说正文写作助手。根据章节/场景/节拍计划与进入本章时的故事快照，写出符合要求的 Markdown 正文。只输出正文，不输出元信息。"},
-        {"role": "user", "content": f"章节目标：{chapter.goal or ''}\n章节梗概：{chapter.summary or ''}\n当前场景：{scene.title or ''}（地点：{scene.location or ''} · 时间：{scene.time or ''} · POV：{scene.pov or ''}）\n场景目标：{scene.character_goals or ''}，冲突：{scene.conflict or ''}，关键事件：{scene.key_events or ''}，场景结果：{scene.scene_result or ''}\n当前节拍：{beat.name or ''}\n节拍指令：{beat.instruction or ''}\n\n故事快照（仅本章开始前已成立的事实）：{json.dumps(snapshot_state, ensure_ascii=False)[:2000]}\n\n前序正文（若存在）：\n{prior_prose[:3000]}"},
+        {"role": "user", "content": f"章节目标：{chapter.goal or ''}\n章节梗概：{chapter.summary or ''}\n当前场景：{scene.title or ''}（地点：{scene.location or ''} · 时间：{scene.time or ''} · POV：{scene.pov or ''}）\n场景目标：{scene.character_goals or ''}，冲突：{scene.conflict or ''}，关键事件：{scene.key_events or ''}，场景结果：{scene.scene_result or ''}\n当前节拍：{beat.name or ''}\n节拍指令：{beat.instruction or ''}\n\n故事快照（仅本章开始前已成立的事实）：{json.dumps(snapshot_state, ensure_ascii=False)[:2000]}\n\n前序已发生场景摘要（保持剧情连贯）：\n{prior_scenes_block}前序正文（若存在）：\n{prior_prose[:3000]}"},
     ]
 
 
@@ -165,7 +174,7 @@ def _generate_beat(db: Session, story_id: str, chapter: Chapter, scene: Scene, b
     task = _record_task(db, story_id, chapter, scene, beat, "generate_scene", config)
     try:
         if adapter:
-            messages = _build_generation_messages(chapter, scene, beat, snapshot_state, prior_text)
+            messages = _build_generation_messages(db, chapter, scene, beat, snapshot_state, prior_text)
             raw = adapter.complete(messages, temperature=config.temperature, reasoning_strength=config.reasoning_strength, json_mode=False, action="generate_scene")
             markdown = (raw or "").strip() or _fallback_prose(beat, scene)
         else:
@@ -179,8 +188,8 @@ def _generate_beat(db: Session, story_id: str, chapter: Chapter, scene: Scene, b
         task.output_summary = json.dumps({"char_len": len(markdown), "prose_version": version}, ensure_ascii=False)
         db.flush()
         # Checkpoint: proposed delta + consistency check on the generated prose.
-        create_beat_delta(db, story_id, chapter, scene, beat, pv)
-        run_consistency_check(db, story_id, chapter, scene, beat, pv, checkpoint="beat")
+        create_beat_delta(db, story_id, chapter, scene, beat, pv, config)
+        run_consistency_check(db, story_id, chapter, scene, beat, pv, checkpoint="beat", config=config)
         db.commit()
         db.refresh(pv)
         return pv
@@ -191,10 +200,49 @@ def _generate_beat(db: Session, story_id: str, chapter: Chapter, scene: Scene, b
         raise HTTPException(status_code=502, detail="Beat prose generation failed; no existing prose was overwritten") from exc
 
 
-def _complete_scene_if_done(db: Session, scene: Scene) -> bool:
+def _ai_scene_summary(db: Session, scene: Scene, config) -> str:
+    """Generate an AI Scene Summary from the scene's applied prose.
+
+    Falls back to the scene_result / first beat text when no model is available
+    or the call fails. Never blocks generation.
+    """
+    beats = list(db.scalars(select(Beat).where(Beat.scene_id == scene.id).order_by(Beat.ordinal)))
+    prose_parts = []
+    for beat in beats:
+        pv = db.scalar(select(ProseVersion).where(ProseVersion.beat_id == beat.id, ProseVersion.status == "applied").order_by(ProseVersion.version.desc()))
+        if pv and pv.markdown:
+            prose_parts.append(pv.markdown)
+    if not prose_parts:
+        return scene.scene_result or ""
+    joined = "\n\n".join(prose_parts)
+    adapter = build_adapters().get(_model_for_config(config.model).provider)
+    if adapter is None:
+        return joined[:300]
+    messages = [
+        {"role": "system", "content": "你是小说场景摘要助手。根据该场景的完整正文，生成一段 100-180 字的场景摘要，概括发生了什么、角色状态如何变化、为后续场景铺垫了什么。只输出摘要文本，不输出 JSON 或元信息。"},
+        {"role": "user", "content": f"场景：{scene.title or ''}（地点：{scene.location or ''} · 时间：{scene.time or ''} · POV：{scene.pov or ''}）\n场景目标：{scene.character_goals or ''}，结果：{scene.scene_result or ''}\n\n正文：\n{joined[:4000]}"},
+    ]
+    try:
+        raw = adapter.complete(messages, temperature=0.3, reasoning_strength="low", json_mode=False, action="scene_summary")
+        summary = (raw or "").strip()
+        if not summary:
+            raise ValueError("empty summary")
+        return summary[:500]
+    except Exception:
+        return joined[:300]
+
+
+def _complete_scene_if_done(db: Session, scene: Scene, config=None) -> bool:
     beats = list(db.scalars(select(Beat).where(Beat.scene_id == scene.id)))
     if beats and all(b.status in FINISHED_BEAT_STATUSES for b in beats):
         scene.status = "completed"
+        # Generate the Scene Summary once (only on first completion), then feed it
+        # into the next scene's plan context so later scenes build on it.
+        if config is not None and not scene.summary:
+            try:
+                scene.summary = _ai_scene_summary(db, scene, config)
+            except Exception:
+                scene.summary = scene.scene_result or ""
         db.commit()
         db.refresh(scene)
         return True
@@ -219,7 +267,7 @@ def generate_scene(db: Session, story_id: str, chapter_id: str, scene_id: str, r
             continue
         pv = _generate_beat(db, story_id, chapter, scene, beat, config, request)
         produced.append(pv)
-    _complete_scene_if_done(db, scene)
+    _complete_scene_if_done(db, scene, config)
     return produced
 
 
@@ -238,7 +286,7 @@ def generate_chapter_remaining(db: Session, story_id: str, chapter_id: str, requ
                 continue
             pv = _generate_beat(db, story_id, chapter, scene, beat, config, request)
             produced.append(pv)
-        _complete_scene_if_done(db, scene)
+        _complete_scene_if_done(db, scene, config)
     return produced
 
 
@@ -268,7 +316,11 @@ def generate_single_beat(db: Session, story_id: str, chapter_id: str, scene_id: 
             raise HTTPException(status_code=409, detail="Beat is finished but has no prose")
         return existing
     config = get_ai_config(db, story_id)
-    return _generate_beat(db, story_id, chapter, scene, beat, config, request)
+    pv = _generate_beat(db, story_id, chapter, scene, beat, config, request)
+    # The workspace UI generates scenes beat-by-beat; finalize the scene (status +
+    # Scene Summary) as soon as the last beat is applied.
+    _complete_scene_if_done(db, scene, config)
+    return pv
 
 
 def backfill_missing_prose(db: Session, story_id: str, chapter_id: str, request: ScenePlanGenerationRequest) -> list[ProseVersion]:
@@ -313,31 +365,122 @@ def backfill_missing_prose(db: Session, story_id: str, chapter_id: str, request:
 # Delta extraction & consistency checkpoints
 # ---------------------------------------------------------------------------
 
-def _build_changes_from_prose(beat: Beat, scene: Scene, markdown: str) -> dict[str, Any]:
-    """Heuristic placeholder for delta extraction (AI extraction is wired when adapter available)."""
+def _ai_extract_changes(db: Session, chapter: Chapter, scene: Scene, beat: Beat, markdown: str, snapshot_state: dict[str, Any], config) -> dict[str, Any] | None:
+    """AI-driven delta extraction from generated prose.
+
+    Asks the configured model to derive character/world/timeline state changes
+    from the prose relative to the chapter-entry snapshot. Returns None on any
+    failure (no adapter, missing key, non-JSON, etc.) so callers fall back to
+    the deterministic heuristic — the prose is never lost.
+    """
+    adapter = build_adapters().get(_model_for_config(config.model).provider)
+    if adapter is None:
+        return None
+    messages = [
+        {"role": "system", "content": "你是小说状态变化提取助手。根据正文与章节开始时的故事快照，提取正文推进后产生的状态变化。只返回合法 JSON，格式：{\"character_changes\": [{\"name\": \"角色名\", \"fields\": {\"key\": \"value\"}}], \"world_changes\": [{\"name\": \"条目名\", \"fields\": {\"key\": \"value\"}}], \"timeline_changes\": [{\"event\": \"事件描述\", \"scene\": \"场景标题\", \"note\": \"备注\"}]}。只提取正文中明确发生的、相对快照的新事实；没有变化就返回空数组。不要编造快照中不存在的内容。"},
+        {"role": "user", "content": f"章节开始快照：{json.dumps(snapshot_state, ensure_ascii=False)[:2500]}\n\n场景：{scene.title or ''}\n节拍：{beat.name or f'Beat {beat.ordinal}'}\n\n正文：\n{markdown[:4000]}"},
+    ]
+    try:
+        raw = adapter.complete(messages, temperature=0.2, reasoning_strength="low", json_mode=True, action="extract_delta")
+        payload = extract_json(raw)
+        if not isinstance(payload, dict):
+            return None
+        changes = {
+            "character_changes": payload.get("character_changes") or [],
+            "world_changes": payload.get("world_changes") or [],
+            "timeline_changes": payload.get("timeline_changes") or [],
+        }
+        # Normalize: ensure each change is a dict with a name.
+        for key in ("character_changes", "world_changes", "timeline_changes"):
+            cleaned = []
+            for item in changes[key]:
+                if isinstance(item, dict):
+                    cleaned.append(item)
+            changes[key] = cleaned
+        return changes
+    except Exception:
+        return None
+
+
+def _build_changes_from_prose(db: Session, chapter: Chapter, scene: Scene, beat: Beat, markdown: str, config) -> dict[str, Any]:
+    """Delta extraction for a beat.
+
+    Prefers AI-driven extraction (derive character/world/timeline changes from
+    the prose); falls back to a deterministic heuristic when no model is
+    available or the model call fails. The author's prose is never discarded.
+    """
+    snapshot = db.scalar(select(StateSnapshot).where(StateSnapshot.chapter_id == chapter.id))
+    snapshot_state = json.loads(snapshot.state) if snapshot else {}
+    ai = _ai_extract_changes(db, chapter, scene, beat, markdown, snapshot_state, config)
+    if ai is not None:
+        ai["scene_summary"] = markdown[:300]
+        return ai
     return {
         "character_changes": [],
         "world_changes": [],
         "timeline_changes": [{"event": beat.name or f"Beat {beat.ordinal}", "scene": scene.title or "", "note": "由本节正文推进"}],
-        "scene_summary": markdown[:200],
+        "scene_summary": markdown[:300],
     }
 
 
-def create_beat_delta(db: Session, story_id: str, chapter: Chapter, scene: Scene, beat: Beat, pv: ProseVersion) -> StateDelta:
+def create_beat_delta(db: Session, story_id: str, chapter: Chapter, scene: Scene, beat: Beat, pv: ProseVersion, config=None) -> StateDelta:
     existing = db.scalar(select(StateDelta).where(StateDelta.scope_type == "beat", StateDelta.scope_id == beat.id))
     if existing is not None:
         return existing
-    delta = StateDelta(story_id=story_id, chapter_id=chapter.id, scope_type="beat", scope_id=beat.id, source_version_id=pv.id, changes=json.dumps(_build_changes_from_prose(beat, scene, pv.markdown), ensure_ascii=False), status="proposed", check_result=json.dumps({"issues": []}, ensure_ascii=False))
+    if config is None:
+        config = get_ai_config(db, story_id)
+    delta = StateDelta(story_id=story_id, chapter_id=chapter.id, scope_type="beat", scope_id=beat.id, source_version_id=pv.id, changes=json.dumps(_build_changes_from_prose(db, chapter, scene, beat, pv.markdown, config), ensure_ascii=False), status="proposed", check_result=json.dumps({"issues": []}, ensure_ascii=False))
     db.add(delta)
     db.commit()
     db.refresh(delta)
     return delta
 
 
-def run_consistency_check(db: Session, story_id: str, chapter: Chapter, scene: Scene, beat: Beat, pv: ProseVersion, checkpoint: str = "beat") -> list[ConsistencyIssue]:
-    """Run a lightweight deterministic consistency check on generated prose."""
+def _ai_consistency_check(db: Session, chapter: Chapter, scene: Scene, beat: Beat, markdown: str, snapshot_state: dict[str, Any], config) -> list[dict[str, str]]:
+    """AI-driven consistency findings (prose vs chapter-entry snapshot).
+
+    Returns a list of {"rule", "severity", "evidence"} dicts; empty on any
+    failure. Deterministic rules still run on top of these findings.
+    """
+    adapter = build_adapters().get(_model_for_config(config.model).provider)
+    if adapter is None:
+        return []
+    messages = [
+        {"role": "system", "content": "你是小说一致性检查助手。将正文与章节开始时的故事快照对比，找出矛盾：角色状态与快照冲突、时间线矛盾、已确认事实被违背、名称/关系不一致等。只返回合法 JSON 数组，每项 {\"rule\": \"规则名\", \"severity\": \"warning|error\", \"evidence\": \"具体矛盾描述\"}。没有矛盾返回 []。"},
+        {"role": "user", "content": f"章节开始快照：{json.dumps(snapshot_state, ensure_ascii=False)[:2500]}\n\n场景：{scene.title or ''}\n节拍：{beat.name or f'Beat {beat.ordinal}'}\n\n正文：\n{markdown[:4000]}"},
+    ]
+    try:
+        raw = adapter.complete(messages, temperature=0.1, reasoning_strength="low", json_mode=True, action="consistency_check")
+        payload = extract_json(raw)
+        if not isinstance(payload, list):
+            return []
+        findings = []
+        for item in payload:
+            if isinstance(item, dict) and item.get("rule"):
+                findings.append({
+                    "rule": str(item.get("rule"))[:120],
+                    "severity": str(item.get("severity") or "warning"),
+                    "evidence": str(item.get("evidence") or ""),
+                })
+        return findings
+    except Exception:
+        return []
+
+
+def run_consistency_check(db: Session, story_id: str, chapter: Chapter, scene: Scene, beat: Beat, pv: ProseVersion, checkpoint: str = "beat", config=None) -> list[ConsistencyIssue]:
+    """Run consistency checks on generated prose: AI (prose vs snapshot) + deterministic rules."""
     issues: list[ConsistencyIssue] = []
     markdown = pv.markdown
+    if config is None:
+        config = get_ai_config(db, story_id)
+    # AI-driven prose-vs-snapshot conflict detection (never blocks on failure).
+    snapshot = db.scalar(select(StateSnapshot).where(StateSnapshot.chapter_id == chapter.id))
+    snapshot_state = json.loads(snapshot.state) if snapshot else {}
+    for finding in _ai_consistency_check(db, chapter, scene, beat, markdown, snapshot_state, config):
+        issues.append(ConsistencyIssue(
+            story_id=story_id, chapter_id=chapter.id, checkpoint=checkpoint, scope_id=beat.id,
+            rule=finding["rule"], severity=finding["severity"], evidence=finding["evidence"], status="open",
+        ))
     # Deterministic heuristics (no external model required).
     if len(markdown) < 20:
         issues.append(ConsistencyIssue(story_id=story_id, chapter_id=chapter.id, checkpoint=checkpoint, scope_id=beat.id, rule="prose_too_short", severity="warning", evidence=f"正文仅 {len(markdown)} 字，可能未完整覆盖节拍。", status="open"))

@@ -162,11 +162,16 @@ Blueprint 验收：Concept 未确认时生成返回 409；四类 Baseline 候选
 
 ## 当前下一步
 
-**MVP 完成定义已达成**（作品库 → 创意 → 概念 → 蓝图 → 章节 → 工作台 → 正文 → Delta 确认 → 下一章完整闭环）。后续可选项：
-1. Phase 6 增强：AI 驱动的 Delta 提取与一致性检查（当前为确定性占位规则）；Scene 完成时生成 Scene Summary 并修订后续计划。
-2. 正文编辑：工作台内 Markdown 编辑 + 应用（作者可直接修改候选后应用）。
-3. E2E 全流程测试补全：`tests/e2e/test_full_flow.py` 时序问题修复，覆盖新工作台正文流程。
-4. README 与架构文档同步 Phase 5/6 真实范围。
+**MVP 完成定义已达成**（作品库 → 创意 → 概念 → 蓝图 → 章节 → 工作台 → 正文 → Delta 确认 → 下一章完整闭环）。已完成的增强项：
+1. ✅ Phase 6 增强：AI 驱动的 Delta 提取与一致性检查（替代确定性占位规则，模型失败回退确定性规则）；Scene 完成时生成 Scene Summary 并注入后续场景生成提示（修订后续计划）。
+2. ✅ 正文编辑：工作台内 Markdown 编辑 + 应用（作者可直接修改候选后应用，append-only 新版本）。
+3. ✅ E2E 全流程测试补全：`tests/e2e/test_full_flow.py` 重写适配当前 SPA（步骤条导航 + js_click + API 预置管线），覆盖新工作台正文流程（摘要展示、作者编辑、场景生成、阅读模式）。
+4. ✅ README 与架构文档同步 Phase 5/6 真实范围。
+
+后续候选（未列入 MVP，按需评估再排期）：
+- 历史章节已确认但缺失的 Scene Summary 批量补建（当前仅新完成场景生成摘要）。
+- 工作台正文渲染为 Markdown 预览（当前为纯文本展示）。
+- 正文编辑增加「查看/回滚历史版本」的图形化入口（API 已支持版本追溯）。
 
 ## 测试套件
 
@@ -174,14 +179,24 @@ Blueprint 验收：Concept 未确认时生成返回 409；四类 Baseline 候选
 |------|------|------|------|
 | 后端单元测试 | `tests/test_phase1.py` | 24 | ✅ 全部通过 |
 | 后端单元测试 | `tests/test_phase5.py` | 7 | ✅ 全部通过 |
-| 后端单元测试 | `tests/test_phase6.py` | 12 | ✅ 全部通过 |
+| 后端单元测试 | `tests/test_phase6.py` | 17 | ✅ 全部通过 |
 | E2E 冒烟测试 | `tests/e2e/test_smoke.py` | 3 | ✅ 全部通过 |
-| E2E 全流程测试 | `tests/e2e/test_full_flow.py` | 14 | ⏳ 待优化（pytest-playwright 时序问题） |
+| E2E 全流程测试 | `tests/e2e/test_full_flow.py` | 9 | ✅ 全部通过（无 Key 独立服务器，确定性回退） |
 
 ### 运行方式
 ```bash
 # 后端单元测试
 py -3.13 -m pytest tests/test_phase1.py -v
+
+# E2E 测试（推荐：无 Key 独立服务器走确定性回退，快速稳定）
+# 终端 1：
+$env:DATABASE_URL="sqlite:///./e2e_test.db"
+$env:AGNES_API_KEY=""; $env:DEEPSEEK_API_KEY=""; $env:GROK_API_KEY=""
+py -3.13 -m alembic upgrade head
+py -3.13 -m uvicorn app.main:app --host 127.0.0.1 --port 8010
+# 终端 2：
+$env:NOVEL_SERVER_URL="http://127.0.0.1:8010"
+py -3.13 -m pytest tests/e2e -v
 
 # E2E 冒烟测试（快速）
 py -3.13 -m pytest tests/e2e/test_smoke.py -v
@@ -230,3 +245,6 @@ playwright install chromium
 - 2026-08-14：新增**第 6 步·阅读模式（全书完结结算画面）**：① 后端 `get_story_reader` + 端点 `GET /stories/{sid}/read`——返回所有章节（含已完成）的场景与已应用正文（仅 applied prose，planned 内容剔除），按章节/场景/Beat 顺序组装。② 前端步骤条新增「6 阅读」，新增 `read` screen：左侧章节列表（含「✓ 已完成 · N 段」状态与 Scene 序号锚点）、右侧连贯正文（不再分 Beat，Scene 作为「节」标题与导航锚点）。③ 确认最后一章 Chapter Delta 后不再回到旧工作台（此前显示「尚无激活章节」），改为跳转阅读模式并 toast「🎉 全书已完成」；作品库中已完成作品（`stage=done`）点击封面直接进入第 6 步阅读。④ 修复：Scene 锚点嵌套在章节按钮内被 `closest('[data-read-chapter]')` 吞掉（改为先判 scene 再判 chapter）；smooth scroll 在 headless 下不可靠改为即时滚动。静态资源 bump `v20260816e`。新增测试 `test_story_reader_returns_continuous_prose`。44 项 pytest 通过；浏览器实测「寒冬归途」（6 章全部 completed）点击封面直接进入阅读模式，左侧 6 章目录 + 15 个 Scene 锚点，右侧连续正文，第 6 章 Scene 3 锚点点击滚动到目标场景（scrollY 20345）。
 - 2026-08-14：修复阅读模式与工作台四个问题：① **阅读模式隐藏未写作场景**——`renderReaderToc`/`renderReaderChapter` 原只显示有正文的场景，导致部分章节「场景只有 1 个、段数对不上」；现显示**所有**场景作为列表（带文学标题，如「暗巷里的独行者」），无正文场景标注「未写作」并在正文区显示占位，段数如实统计（「已写 X 段 / N 个场景（M 个已写作）」）。② **TOC 场景锚点改为文学标题列表**（旧数字序号锚点移除）。③ **工作台默认显示上次章节**——`loadWorkspaceContext` 无 active 章节时（如全书完成）回退到 localStorage 记忆的 `last-chapter:{storyId}`，否则第一章；已完成章节完整显示，不再「尚无激活章节/尚未生成章节计划」；进入章节时写回记忆。④ **Confirm Delta 完整性校验**——`confirm_chapter_delta` 现在要求所有场景的所有 Beat 均有 applied prose 才能确认（否则 409 并列出缺失场景/Beat）；经可观测性日志（86 次 generate_scene 全部 succeeded、无失败）与数据库核查确认：此前「寒冬归途」第 1/2/5 章缺失场景正文是**历史阶段性问题**（当时部分场景生成后即确认 Delta，日志无对应生成请求），但**确认缺少完整性校验是现存设计缺口**——已通过该校验堵住。静态资源 bump `v20260816f`。新增测试 `test_confirm_delta_rejected_when_chapter_incomplete`。45 项 pytest 通过；浏览器实测阅读模式显示全部场景（含「未写作」）、工作台恢复第 6 章完整显示。
 - 2026-08-14：新增**缺失正文补全（backfill）**功能：① 后端 `backfill_missing_prose` + 端点 `POST /stories/{sid}/chapters/{cid}/backfill`——对 active 或 completed 章节生成所有缺 applied prose 的 Beat 正文；**上下文使用该章节入口时的 StateSnapshot**（`StateSnapshot.chapter_id == chapter.id`），不混入后续章节信息，避免补写历史章节导致的上下文错乱；补写后自动 `mark_subsequent_stale(chapter.ordinal)` 标记后续章节快照待重算。② 前端已完成章节工作台（章节级）显示「补全本章缺失正文（N 段）→」按钮（统计全章缺失，非仅当前场景），点击后调用 backfill 并提示「使用本章入口 Snapshot 作为上下文，避免与后续章节错乱」；rail-footer 改用事件委托保证重渲染后按钮与 Context 弹窗仍可用。静态资源 bump `v20260816h`。新增测试 `test_backfill_completes_incomplete_chapter`。46 项 pytest 通过；浏览器实测「寒冬归途」第 5 章（缺 15 段）点击补全后 4 场景全部 completed（5+5+5+5=20 段），补全按钮消失，第 6 章 snapshot 标记 stale（「Chapter 5 内容变更，需按序重算」），reader 显示第 5 章完整 4 场景。
+- 2026-08-16：**Phase 6 增强：AI 驱动的 Delta 提取、一致性检查与 Scene Summary**：① `writing_service.py` 新增 `_ai_extract_changes`（模型基于本章入口快照从正文提取角色/世界/时间线变化，失败回退确定性规则）、`_ai_consistency_check`（模型输出一致性发现，叠加确定性规则）、`_ai_scene_summary`（场景完成时生成摘要，失败回退正文片段）；`create_beat_delta`/`run_consistency_check` 接受 config，`_build_generation_messages` 注入前序已完结场景摘要（修订后续计划）。② `scenes` 表新增 `summary` 列（迁移 `20260814_0006_scene_summary`）；`scene_response` 与 reader 数据暴露 `summary`。③ **修复真实 bug**：`generate_single_beat`（UI 逐个生成 Beat 的路径）此前不调用 `_complete_scene_if_done`，导致场景状态/摘要不生成——现补上，最后一个 Beat 应用即自动完结场景并生成摘要。④ 前端工作台场景概览与阅读模式展示「场景摘要」（阅读模式带标签）；静态资源 bump `v20260816i/k`。新增测试 `test_ai_delta_extraction_derives_changes`、`test_scene_completion_generates_scene_summary`、`test_ai_consistency_check_records_model_findings`、`test_later_scene_prompt_includes_prior_scene_summary`、`test_generate_beat_by_beat_completes_scene_with_summary`。48 项 pytest 通过；浏览器实测「冬夜同行」第 2 章场景「猎犬降临」真实模型生成正文后自动产生 Scene Summary，工作台与阅读模式均展示。
+- 2026-08-16：**工作台内 Markdown 编辑 + 应用**：Beat 卡片新增「✎ 编辑正文」（有正文的 Beat）与「✎ 作者手写」（未生成 Beat）；点击后正文区变为 textarea（预填当前正文，`editing` 态展开 max-height），操作区变为「保存并应用 → / 取消」；保存调用 `POST .../prose-versions`（`applied_by=author`、`expected_version=beat.version`），成功后重载 Context 并 toast「正文已由作者应用为 vX，历史版本保留」；版本冲突 409 时提示刷新。静态资源 bump `v20260816j`。后端 `apply_beat_prose` 已有 append-only 语义与 `test_apply_beat_prose_is_append_only` 覆盖；浏览器实测编辑场景 1 Beat 保存后 v1→v2 版本递增、原文保留。
+- 2026-08-16：**E2E 全流程测试补全**：`tests/e2e/test_full_flow.py` 重写适配当前 SPA（旧版依赖 `?story=&screen=` URL 参数，当前 SPA 已不支持）：① 会话级 `api` + `story` fixture 通过 API 预置完整管线（概念→蓝图→章节→场景→节拍→场景 1 正文），测试结束后软删除；② UI 辅助 `open_story`/`js_click`/`goto_screen` 使用步骤条导航与 `dispatchEvent` 点击（规避 SPA 点击兼容问题）；③ 覆盖：作品库/创意/概念/蓝图/章节渲染、工作台场景摘要展示、**作者编辑正文**（textarea + 保存 + v2 断言）、**未写作场景一键生成**（场景摘要 + 全部 Beat 应用）、阅读模式连续正文；④ `test_smoke.py` 与 README 改用 `NOVEL_SERVER_URL`（默认 8000）。运行方式：无 Key 独立服务器（8010，`e2e_test.db`）确定性回退，`pytest tests/e2e -v` 12 项全绿（9 全流程 + 3 冒烟，21.6s）。

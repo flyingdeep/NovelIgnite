@@ -16,9 +16,11 @@ AI 输出始终是候选内容，只有作者显式确认或应用后才会成�
 4. Story Blueprint：生成 Characters、World、Initial Timeline、Story Arc 四类 Baseline，支持编辑、Lock、确认与版本履历。
 5. Living State：Blueprint 确认后自动创建初始投影；每确认一章 Chapter Delta 生成一个新版本（v1→v2→…），并投影三域状态与章节事件推进；支持按版本查看更新履历。
 6. Chapter Plan：根据已确认 Blueprint 生成章节卡片；第 1 章为 `fixed + active`，后续章节为 `outline + locked`。
-7. Chapter Workspace：Chapter Context（Snapshot + Events + Scenes + Beats）、场景/节拍规划、正文生成与应用（append-only 版本，自动接受）、Chapter Delta 合并与作者确认、下一章激活、后续章节过期标记。
-8. 一致性检查：生成正文后自动跑确定性一致性规则（过短/占位标记），问题以提醒展示，不阻止写作。
-9. 阅读模式（全书完结）：确认最后一章 Chapter Delta 后进入结算画面（第 6 步）阅读完整小说；左侧章节列表、右侧连贯正文，Scene 作为「节」导航锚点；已完成作品从作品库直接进入阅读模式。
+7. Chapter Workspace：Chapter Context（Snapshot + Events + Scenes + Beats）、场景/节拍规划、正文生成与应用（append-only 版本，自动接受）、工作台内 Markdown 编辑（作者可直接修改正文后应用，创建新版本、保留历史）、Chapter Delta 合并与作者确认、下一章激活、后续章节过期标记。
+8. AI 驱动的 Delta 提取与一致性检查：生成/应用正文后由模型基于本章入口快照提取角色/世界/时间线变化（失败回退到确定性规则），并输出一致性发现（与快照矛盾、时间线冲突、已确认事实违背），全部作为 proposed 候选或提醒展示，不自动覆盖作者确认的事实；确定性规则（过短/占位标记）始终叠加运行。
+9. Scene Summary：场景全部 Beat 完成后自动生成场景摘要（模型失败回退到正文片段），工作台与阅读模式均展示；后续场景的生成提示会注入前序已完结场景的摘要以保持剧情连贯（“修订后续计划”）。
+10. 一致性检查：生成正文后自动跑确定性一致性规则（过短/占位标记），问题以提醒展示，不阻止写作。
+11. 阅读模式（全书完结）：确认最后一章 Chapter Delta 后进入结算画面（第 6 步）阅读完整小说；左侧章节列表、右侧连贯正文，Scene 作为「节」导航锚点；已完成作品从作品库直接进入阅读模式。
 
 ## 启动
 
@@ -109,7 +111,8 @@ py -3.13 -m uvicorn app.main:app --reload
 - `GET /api/v1/stories/{id}/chapters/{chapter_id}/context`
 - `GET /api/v1/stories/{id}/read`（全书阅读模式：所有章节 + 场景 + 已应用正文）
 - `POST /api/v1/stories/{id}/chapters/{chapter_id}/generations`（scene-plan / beat-plan / generate_scene / generate_chapter_remaining / regenerate_beat）
-- `POST /api/v1/stories/{id}/chapters/{chapter_id}/scenes/{scene_id}/generations`
+- `POST /api/v1/stories/{id}/chapters/{chapter_id}/scenes/{scene_id}/generations`（scene-plan / beat-plan / generate_scene / generate_beat / regenerate_beat）
+- `POST /api/v1/stories/{id}/chapters/{chapter_id}/backfill`（补全历史章节缺失正文，使用章节入口快照）
 - `POST /api/v1/stories/{id}/chapters/{chapter_id}/scenes/{scene_id}/beats/{beat_id}/prose-versions`
 - `GET /api/v1/stories/{id}/chapters/{chapter_id}/scenes/{scene_id}/beats/{beat_id}/prose`
 - `GET /api/v1/stories/{id}/chapters/{chapter_id}/deltas`
@@ -123,7 +126,21 @@ py -3.13 -m alembic upgrade head
 py -3.13 -m pytest -q
 ```
 
-当前回归结果：**46 passed**。覆盖作品库、Idea 锁定、AI 配置、三模型适配（含思考/推理参数与官方 max token）、Concept 候选/确认与卖点规范化、Blueprint 四分类全条目渲染、Living State 初始投影、Chapter Plan 逐章激活与锁定章节保护、标题生成、可观测性指标（Phase 1–4）；Chapter Workspace 快照/上下文、Scene / Beat 规划与乐观锁、正文自动应用与版本追溯、Chapter Delta 确认（含完整性校验）、缺失正文补全、Living State 版本递增、一致性检查、全书阅读模式数据（Phase 5–6）；以及 Playwright 端到端冒烟（E2E）。
+当前回归结果：**48 passed（单元/集成）＋ 12 passed（E2E）**。覆盖作品库、Idea 锁定、AI 配置、三模型适配（含思考/推理参数与官方 max token）、Concept 候选/确认与卖点规范化、Blueprint 四分类全条目渲染、Living State 初始投影、Chapter Plan 逐章激活与锁定章节保护、标题生成、可观测性指标（Phase 1–4）；Chapter Workspace 快照/上下文、Scene / Beat 规划与乐观锁、正文自动应用与版本追溯、Chapter Delta 确认（含完整性校验）、缺失正文补全、Living State 版本递增、一致性检查、全书阅读模式数据（Phase 5–6）；以及 AI 驱动 Delta 提取、AI 一致性发现、Scene Summary 生成与前置摘要注入、逐个 Beat 生成自动完结场景（Phase 6 增强）；Playwright 端到端（E2E）覆盖作品库→创意→概念→蓝图→章节→工作台正文编辑/生成→阅读模式全流程。
+
+E2E 运行方式（建议使用无 API Key 的独立服务器走确定性回退，快速稳定）：
+
+```powershell
+# 终端 1：E2E 专用服务器（独立数据库 + 无 Key）
+$env:DATABASE_URL="sqlite:///./e2e_test.db"
+$env:AGNES_API_KEY=""; $env:DEEPSEEK_API_KEY=""; $env:GROK_API_KEY=""
+py -3.13 -m alembic upgrade head
+py -3.13 -m uvicorn app.main:app --host 127.0.0.1 --port 8010
+
+# 终端 2：运行 E2E
+$env:NOVEL_SERVER_URL="http://127.0.0.1:8010"
+py -3.13 -m pytest tests/e2e -v
+```
 
 ## 目录
 

@@ -100,6 +100,7 @@ def scene_response(scene: Scene, beats: list[Beat] | None = None) -> dict[str, A
         "key_events": scene.key_events,
         "scene_result": scene.scene_result,
         "chapter_goal_relation": scene.chapter_goal_relation,
+        "summary": scene.summary,
         "status": scene.status,
         "version": scene.version,
     }
@@ -204,7 +205,7 @@ def get_story_reader(db: Session, story_id: str) -> dict[str, Any]:
                 if prose is None:
                     continue
                 beat_paras.append({"beat_name": beat.name or f"Beat {beat.ordinal}", "markdown": prose.markdown})
-            scene_data.append({"id": scene.id, "ordinal": scene.ordinal, "title": scene.title, "location": scene.location, "time": scene.time, "beats": beat_paras})
+            scene_data.append({"id": scene.id, "ordinal": scene.ordinal, "title": scene.title, "location": scene.location, "time": scene.time, "summary": scene.summary, "beats": beat_paras})
         chapter_data.append({
             "id": chapter.id,
             "ordinal": chapter.ordinal,

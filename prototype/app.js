@@ -933,10 +933,10 @@ function beatHtmlApi(beat, readOnly) {
   let actions = "";
   if (readOnly) {
     actions = `<span class="tag green" style="margin-left:8px">已应用 v${prose ? prose.version : "?"}</span>`;
-  } else if (finished) {
-    actions = `<button class="secondary-button regenerate-beat" type="button" data-scene-id="${beat.scene_id}" data-beat-id="${beat.id}">重新生成</button>${versionBadge}`;
+  } else if (prose) {
+    actions = `<button class="secondary-button edit-beat" type="button" data-scene-id="${beat.scene_id}" data-beat-id="${beat.id}">✎ 编辑正文</button> <button class="secondary-button regenerate-beat" type="button" data-scene-id="${beat.scene_id}" data-beat-id="${beat.id}">重新生成</button>${versionBadge}`;
   } else {
-    actions = `<button class="primary-button generate-beat" type="button" data-scene-id="${beat.scene_id}" data-beat-id="${beat.id}" data-beat-name="${(beat.name || `Beat ${beat.ordinal}`).replace(/"/g, "&quot;")}">生成 Beat 正文 →</button>`;
+    actions = `<button class="primary-button generate-beat" type="button" data-scene-id="${beat.scene_id}" data-beat-id="${beat.id}" data-beat-name="${(beat.name || `Beat ${beat.ordinal}`).replace(/"/g, "&quot;")}">生成 Beat 正文 →</button> <button class="secondary-button edit-beat" type="button" data-scene-id="${beat.scene_id}" data-beat-id="${beat.id}">✎ 作者手写</button>`;
   }
   return `<article class="beat-card ${beat.status === "available" || beat.status === "generated" || finished ? "current" : ""}">
     <button class="beat-head" type="button" aria-expanded="${expanded}"><span class="tag ${statusClass}">${statusText}</span><b>${beat.name || `Beat ${beat.ordinal}`}</b><span>${expanded ? "收起 ▴" : "展开 ▾"}</span></button>
@@ -997,7 +997,7 @@ function renderWorkspaceFromContext(context) {
     ? `<div class="scene-actions delta-confirm-area" style="margin-top:16px;padding:14px;border:1px solid var(--accent,#7c5cff);border-radius:10px"><b>Chapter Delta 就绪</b><p style="margin:6px 0">本章所有 Beat 已应用。确认 Chapter Delta 后将更新 Living State 并激活下一章。</p><button class="primary-button confirm-chapter-delta" type="button">确认 Chapter Delta →</button></div>`
     : "";
   const sceneGenButton = readOnly ? "" : `<button class="primary-button scene-generate" type="button">生成整个 Scene 正文</button>`;
-  document.querySelector("#scene-content").innerHTML = `<div class="scene-title-row"><h2 class="scene-title">Scene ${scene.ordinal} · ${scene.title}</h2>${sceneGenButton}<button class="config-button" type="button" data-config>⚙ 生成设置</button></div><p class="scene-subtitle">${subtitle}</p><div class="scene-overview"><b>Scene 描述</b><br>${scene.character_goals || ""}${scene.conflict ? `<br><b>冲突：</b>${scene.conflict}` : ""}${scene.key_events ? `<br><b>关键事件：</b>${scene.key_events}` : ""}${scene.scene_result ? `<br><b>场景结果：</b>${scene.scene_result}` : ""}</div>${beatsHtml || `<div class="books-empty" style="grid-column:1/-1"><h3>该场景尚未规划 Beat</h3><p>点击下方「生成节拍计划」，为当前场景规划 Beat 顺序。</p></div>`}<div class="scene-actions" style="margin-top:12px">${actionBar}</div>${deltaArea}`;
+  document.querySelector("#scene-content").innerHTML = `<div class="scene-title-row"><h2 class="scene-title">Scene ${scene.ordinal} · ${scene.title}</h2>${sceneGenButton}<button class="config-button" type="button" data-config>⚙ 生成设置</button></div><p class="scene-subtitle">${subtitle}</p><div class="scene-overview"><b>Scene 描述</b><br>${scene.character_goals || ""}${scene.conflict ? `<br><b>冲突：</b>${scene.conflict}` : ""}${scene.key_events ? `<br><b>关键事件：</b>${scene.key_events}` : ""}${scene.scene_result ? `<br><b>场景结果：</b>${scene.scene_result}` : ""}${scene.summary ? `<br><b>场景摘要：</b>${scene.summary}` : ""}</div>${beatsHtml || `<div class="books-empty" style="grid-column:1/-1"><h3>该场景尚未规划 Beat</h3><p>点击下方「生成节拍计划」，为当前场景规划 Beat 顺序。</p></div>`}<div class="scene-actions" style="margin-top:12px">${actionBar}</div>${deltaArea}`;
   renderWorkspaceStatus(context);
   bindWorkspaceEvents();
 }
@@ -1262,6 +1262,7 @@ function renderReaderChapter(chapter) {
     const proseHtml = scene.beats.map((b) => `<div class="reader-prose"><p>${escapeHtml(b.markdown || "")}</p></div>`).join("");
     return `<section class="reader-scene-section" id="scene-${chapter.id}-${scene.id}">
       <h3>${escapeHtml(scene.title || `场景 ${scene.ordinal}`)}</h3>${sub ? `<p class="reader-scene-sub">${escapeHtml(sub)}</p>` : ""}
+      ${scene.summary ? `<p class="reader-scene-summary"><b>场景摘要：</b>${escapeHtml(scene.summary)}</p>` : ""}
       ${proseHtml}
     </section>`;
   }).join("");
@@ -1403,6 +1404,47 @@ function bindWorkspaceEvents() {
       toast("已生成新版本并自动应用，历史正文保留。");
     } catch (error) { toast("重新生成失败。"); }
     finally { hideThinking(); }
+  }));
+  // Workspace Markdown editing: author can edit the candidate/current prose and apply it.
+  document.querySelectorAll(".edit-beat").forEach((button) => button.addEventListener("click", () => {
+    const card = button.closest(".beat-card");
+    const body = card.querySelector(".beat-body");
+    if (!body) return;
+    const currentText = body.textContent.replace(/\s*收起 ▴\s*$/, "").trim();
+    body.innerHTML = "";
+    body.classList.add("editing");
+    const ta = document.createElement("textarea");
+    ta.className = "prose-editor";
+    ta.rows = 9;
+    ta.value = currentText;
+    body.appendChild(ta);
+    const actionsEl = card.querySelector(".beat-actions");
+    actionsEl.innerHTML = `<button class="primary-button save-beat-prose" type="button" data-scene-id="${button.dataset.sceneId}" data-beat-id="${button.dataset.beatId}">保存并应用 →</button> <button class="secondary-button cancel-beat-edit" type="button">取消</button>`;
+    const saveBtn = actionsEl.querySelector(".save-beat-prose");
+    const cancelBtn = actionsEl.querySelector(".cancel-beat-edit");
+    cancelBtn.addEventListener("click", () => { currentWorkspaceContext && renderWorkspace(); });
+    saveBtn.addEventListener("click", async () => {
+      const book = currentBook();
+      const sceneId = saveBtn.dataset.sceneId;
+      const beatId = saveBtn.dataset.beatId;
+      const markdown = ta.value.trim();
+      if (!apiAvailable || !book || !currentActiveChapterId || !sceneId || !beatId) { toast("需要激活章节。"); return; }
+      if (!markdown) { toast("正文不能为空。"); return; }
+      const beat = ((currentWorkspaceContext?.scenes || []).find((s) => s.id === sceneId)?.beats || []).find((b) => b.id === beatId);
+      if (!beat) { toast("未找到该 Beat，请刷新。"); return; }
+      try {
+        await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/scenes/${sceneId}/beats/${beatId}/prose-versions`, {
+          method: "POST",
+          body: JSON.stringify({ markdown, applied_by: "author", expected_version: beat.version }),
+          timeoutMs: 60000,
+        });
+        currentWorkspaceContext = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/context`, { timeoutMs: 60000 });
+        renderWorkspace();
+        toast("正文已由作者应用为 v" + (beat.version + 1) + "，历史版本保留。");
+      } catch (error) {
+        toast("应用失败：正文版本可能已变化，请刷新后重试。");
+      }
+    });
   }));
   // Phase 6: complete the rest of the chapter (beat by beat with live progress)
   // (backfill-chapter click is handled via rail-footer delegation -> handleBackfillClick)
