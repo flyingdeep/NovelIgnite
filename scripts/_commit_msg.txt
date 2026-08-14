@@ -1,6 +1,8 @@
-系统提示词升级 v2：能力拓展版（角色设定+方法论+质量要求+反模式），限定中文输出
+步骤条阶段约束：未推进到的步骤不允许进入
 
-- 全部 10 个提示词由「仅定义格式」升级为「角色设定 → 任务拆解 → 方法论 → 质量要求 → 硬约束 → 反模式」结构，并统一限定简体中文输出
-- 重点：正文写作提示词加入事实边界/五感/潜台词/节奏/POV 纪律/反翻译腔；概念提示词五步策划法+场景化卖点；Delta 提取区分事实与推测；一致性检查八类矛盾清单
-- PROMPT_VERSIONS 全部升为 2；测试断言改为动态版本对比
-- 真实模型验证：概念生成卖点全部场景化有画面感；50 单元测试通过
+- 前端新增 STAGE_SCREENS 映射（Story.stage → 可访问屏幕）与 canAccessScreen/updateStepbarLock；showScreen 与 [data-nav] 点击双重防御，越权进入被阻止并 toast 提示原因；未解锁步骤灰显 .step.disabled
+- 打开故事时 refreshBookStage 从后端刷新真实 stage；章节生成/Delta 确认后同步前端 stage（chapter_planning/writing/done）
+- index.html 工作台静态演示占位中性化（消除「消失的委托人/缺失报告」残留假内容）
+- 约束：概念→蓝图→章节→工作台→阅读按阶段递进解锁（blueprint_review 时 4/5/6 锁定）
+- E2E 新增 test_stepbar_locked_until_stage_progression；test_reader_shows_continuous_prose 改为推进到 writing 后验证；13 项 E2E 全绿
+- README/开发计划同步；静态资源 bump v20260816l

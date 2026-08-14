@@ -391,8 +391,59 @@ let currentActiveChapterId = null;
 let readerData = null;
 let readerActiveChapter = null;
 let readerActiveScene = null;
+// 阶段 → 可访问屏幕映射（与后端 Story.stage 对应；未推进到的步骤禁止进入）。
+const STAGE_SCREENS = {
+  idea: ["idea"],
+  idea_locked: ["idea", "concept"],
+  concept_confirmed: ["idea", "concept", "blueprint"],
+  blueprint_review: ["idea", "concept", "blueprint"],
+  blueprint_confirmed: ["idea", "concept", "blueprint", "chapters"],
+  chapter_planning: ["idea", "concept", "blueprint", "chapters", "workspace"],
+  writing: ["idea", "concept", "blueprint", "chapters", "workspace", "read"],
+  done: ["idea", "concept", "blueprint", "chapters", "workspace", "read"],
+};
+const SCREEN_LOCK_HINTS = {
+  concept: "该步骤尚未解锁：请先在「创意」页生成概念。",
+  blueprint: "该步骤尚未解锁：请先确认概念，蓝图才会解锁。",
+  chapters: "该步骤尚未解锁：请先确认蓝图，章节规划才会解锁。",
+  workspace: "该步骤尚未解锁：请先生成章节计划，工作台才会解锁。",
+  read: "该步骤尚未解锁：请按章节顺序推进写作，阅读模式在全书完成后解锁。",
+};
 const API_BASE = "/api/v1";
 let apiAvailable = false;
+
+function canAccessScreen(screen) {
+  if (screen === "works") return true;
+  const book = currentBook();
+  if (!book) return false;
+  return (STAGE_SCREENS[book.stage] || []).includes(screen);
+}
+
+function lockHintFor(screen) {
+  return SCREEN_LOCK_HINTS[screen] || "该步骤尚未解锁，请先完成前面的步骤。";
+}
+
+function updateStepbarLock() {
+  const book = currentBook();
+  document.querySelectorAll("[data-nav]").forEach((button) => {
+    const nav = button.dataset.nav;
+    if (nav === "works") return;
+    const locked = !book || !(STAGE_SCREENS[book.stage] || []).includes(nav);
+    button.classList.toggle("disabled", locked);
+    button.setAttribute("aria-disabled", String(locked));
+  });
+}
+
+async function refreshBookStage(book) {
+  if (!apiAvailable || !book) return;
+  try {
+    const work = await apiRequest(`/works/${book.id}`);
+    book.stage = work.stage;
+    book.version = work.version;
+    book.status = work.stage === "done" ? "completed" : "inprogress";
+    updateStepbarLock();
+  } catch (error) { /* keep current stage */ }
+}
 
 async function apiRequest(path, options = {}) {
   const controller = new AbortController();
@@ -585,6 +636,10 @@ function toast(message) {
 }
 
 function showScreen(id) {
+  if (id !== "works" && !canAccessScreen(id)) {
+    toast(lockHintFor(id));
+    return;
+  }
   document.querySelectorAll(".screen").forEach((screen) => screen.classList.toggle("active", screen.id === id));
   document.querySelectorAll("[data-nav]").forEach((button) => button.classList.toggle("active", button.dataset.nav === id));
   if (id === "workspace") loadWorkspaceContext();
@@ -595,6 +650,7 @@ function showScreen(id) {
   if (id === "chapters") loadChaptersForCurrentStory();
   if (id === "read") loadReaderForCurrentStory();
   updateTopState();
+  updateStepbarLock();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -704,6 +760,7 @@ function updateTopState() {
   }
   crumb.innerHTML = `<strong>${book.title}</strong><span class="status-dot">${book.status === "completed" ? "已完成" : "进行中"}</span><button class="title-edit" type="button" data-title-edit aria-label="修改书名">✎</button>`;
   stepbar.classList.remove("library-only");
+  updateStepbarLock();
 }
 
 function renderBooks() {
@@ -1484,6 +1541,7 @@ function bindWorkspaceEvents() {
     try {
       const result = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/deltas/confirm`, { method: "POST", body: JSON.stringify({}) });
       if (result.next_chapter) {
+        book.stage = "writing";
         currentActiveChapterId = result.next_chapter.id;
         currentWorkspaceContext = null;
         await loadWorkspaceContext();
@@ -1491,6 +1549,7 @@ function bindWorkspaceEvents() {
       } else {
         // Last chapter finished — the whole novel is complete. Show the settlement screen (step 6 reader).
         book.status = "completed";
+        book.stage = "done";
         currentActiveChapterId = null;
         currentWorkspaceContext = null;
         showScreen("read");
@@ -1642,8 +1701,11 @@ async function generateConcept(book) {
 
 function bindEvents() {
   document.querySelectorAll("[data-nav]").forEach((button) => button.addEventListener("click", () => {
-    if (button.dataset.nav === "workspace") currentActiveChapterId = null; // stepbar always targets the active chapter
-    showScreen(button.dataset.nav);
+    const nav = button.dataset.nav;
+    if (nav === "works") { showScreen("works"); return; }
+    if (!canAccessScreen(nav)) { toast(lockHintFor(nav)); return; }
+    if (nav === "workspace") currentActiveChapterId = null; // stepbar always targets the active chapter
+    showScreen(nav);
   }));
   document.querySelector("#reader-toc-list").addEventListener("click", (event) => {
     // Scene anchors take priority: they are nested inside chapter buttons.
@@ -1739,6 +1801,7 @@ function bindEvents() {
         showThinking("正在根据蓝图规划章节…", "AI 正在生成章节卡片与逐章激活");
         try {
           const result = await apiRequest(`/stories/${book.id}/chapter-plan`, { method: "POST", body: JSON.stringify({ action: "generate_chapter_plan" }) });
+          book.stage = "chapter_planning";
           window.currentChapters = result.chapters;
           renderChaptersFromApi(result.chapters);
           document.querySelector("#chapter-plan-note").textContent = "已生成 · 第 1 章已激活";
@@ -1766,6 +1829,7 @@ function bindEvents() {
     showThinking("正在根据蓝图规划章节…", "AI 正在生成章节卡片与逐章激活");
     try {
       const result = await apiRequest(`/stories/${book.id}/chapter-plan`, { method: "POST", body: JSON.stringify({ action: "generate_chapter_plan" }) });
+      book.stage = "chapter_planning";
       window.currentChapters = result.chapters;
       renderChaptersFromApi(result.chapters);
       document.querySelector("#chapter-plan-note").textContent = "已生成 · 第 1 章已激活";
@@ -1877,6 +1941,8 @@ function bindEvents() {
       } else {
         showScreen("idea");
       }
+      // 进入故事时以后端为准刷新真实 stage，并据此锁定未解锁的步骤。
+      refreshBookStage(book);
       return;
     }
     const del = event.target.closest(".delete-book");

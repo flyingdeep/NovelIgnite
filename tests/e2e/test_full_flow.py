@@ -191,10 +191,51 @@ def test_workspace_generate_scene_prose(page, story):
 # 阅读模式
 # ---------------------------------------------------------------------------
 
-def test_reader_shows_continuous_prose(page, story):
-    """阅读模式展示已写章节的连续正文与场景摘要。"""
-    goto_screen(page, story["id"], "read")
+def test_reader_shows_continuous_prose(page, story, api):
+    """阅读模式展示已写章节的连续正文与场景摘要（写作阶段后解锁）。"""
+    # 推进到 writing：完成全章正文并确认 Chapter Delta（阅读模式在 writing/done 解锁）。
+    sid = story["id"]
+    cid = story["chapter_id"]
+    for scene in story["scenes"]:
+        r = api.post(f"/api/v1/stories/{sid}/chapters/{cid}/scenes/{scene['id']}/generations", json={"action": "generate_scene"})
+        assert r.status_code == 200, r.text
+    confirm = api.post(f"/api/v1/stories/{sid}/chapters/{cid}/deltas/confirm", json={})
+    assert confirm.status_code == 200, confirm.text
+    assert api.get(f"/api/v1/works/{sid}").json()["stage"] == "writing"
+
+    goto_screen(page, sid, "read")
     expect(page.locator("#reader-content")).to_be_visible(timeout=20000)
     expect(page.locator("#reader-toc-list")).to_contain_text("第 1 章", timeout=15000)
     # 已写作场景正文可见（场景摘要或正文至少其一）。
     expect(page.locator("#reader-content")).to_contain_text("场景摘要", timeout=15000)
+
+
+# ---------------------------------------------------------------------------
+# 步骤条阶段约束（未推进到的步骤不允许进入）
+# ---------------------------------------------------------------------------
+
+def test_stepbar_locked_until_stage_progression(page, api):
+    """蓝图候选生成但未确认（blueprint_review）时，步骤条 4/5/6 锁定且点击被阻止。"""
+    w = api.post("/api/v1/works", json={"title": "E2E 步骤约束"}).json()
+    sid = w["id"]
+    try:
+        api.put(f"/api/v1/stories/{sid}/idea", json={"idea_text": "步骤约束测试创意。", "expected_version": w["version"]})
+        concept = api.post(f"/api/v1/stories/{sid}/generations", json={"action": "generate_concept"}).json()["artifact"]
+        api.post(f"/api/v1/stories/{sid}/concept/confirm", json={"expected_version": concept["version"]})
+        api.post(f"/api/v1/stories/{sid}/blueprint/generations", json={"action": "generate_blueprint"})
+        # 蓝图候选已生成但未确认 -> stage=blueprint_review
+        assert api.get(f"/api/v1/works/{sid}").json()["stage"] == "blueprint_review"
+
+        open_story(page, sid)
+        # 步骤条 4/5/6 应为锁定状态（.disabled class），前 3 步开放。
+        for nav, expected in (("idea", False), ("concept", False), ("blueprint", False),
+                              ("chapters", True), ("workspace", True), ("read", True)):
+            locked = page.evaluate(f"document.querySelector('#stepbar [data-nav=\"{nav}\"]').classList.contains('disabled')")
+            assert locked is expected, f"{nav} 锁定状态应为 {expected}，实际 {locked}"
+        # 点击「章节」应被阻止：screen 不切换。
+        js_click(page, '#stepbar [data-nav="chapters"]')
+        page.wait_for_timeout(600)
+        active = page.evaluate("() => document.querySelector('.screen.active').id")
+        assert active != "chapters", "未推进到章节阶段时不应进入章节页"
+    finally:
+        api.delete(f"/api/v1/works/{sid}")
