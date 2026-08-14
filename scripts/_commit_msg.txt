@@ -1,8 +1,0 @@
-LLM 调用失败真实原因可溯源
-
-- model_adapter 新增 _classify_error：提取 error_type / error_code / http_status / error_category / error_detail（脱敏截断 300 字符）
-- error_category 归类：timeout / connection / auth / permission / rate_limit / not_found / server / bad_request / content_policy / api / other（内容策略关键词命中归 content_policy）
-- observability 记录上述字段到 generation 日志行；/metrics 新增 error_categories 计数
-- 新增测试：test_classify_error_reveals_real_failure_cause、test_generation_failure_logs_real_cause
-- 修复 test_locked_chapter_context_is_readonly 未 mock workspace 模型层、真实 Key 环境偶发 502 的缺陷
-- README/开发计划同步；52 单元测试通过
