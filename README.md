@@ -85,9 +85,10 @@ py -3.13 -m uvicorn app.main:app --reload
 
 ## 可观测性
 
-- `GET /metrics`：JSON 指标快照（请求数/状态码分布、生成任务成功率/平均与最大耗时、按 action 与模型统计、错误类型计数、最近事件）。
+- `GET /metrics`：JSON 指标快照（请求数/状态码分布、生成任务成功率/平均与最大耗时、按 action 与模型统计、错误类型计数、`error_categories` 失败类别计数、最近事件）。
 - 每次生成写入 `generation_tasks.prompt_version`（所用提示词版本号），与 `model_snapshot` 一起支持按版本追溯生成结果；提示词内容变更时在 `app/infrastructure/prompts.py` 递增对应版本号。
-- `logs/app.jsonl`：结构化 JSONL 日志（请求、生成调用：模型/耗时/token/状态/错误类型、请求异常）。隐私约束：不记录完整提示词、正文与 API Key；日志目录被 `.gitignore` 排除。
+- **LLM 调用失败可溯源**：每次失败记录 `error_type`（异常类）、`error_code`（提供商错误码，如 `content_filter`）、`http_status`（如 400/429/502）、`error_category`（`timeout`/`connection`/`auth`/`rate_limit`/`content_policy`/`bad_request`/`server`/`api`…）以及脱敏截断的 `error_detail`（API 返回的错误说明），可直接区分超时、合规性拒绝、限流、参数错误等真实原因；`/metrics` 的 `errors` 与 `error_categories` 按计数聚合。
+- `logs/app.jsonl`：结构化 JSONL 日志（请求、生成调用：模型/耗时/token/状态/错误类型/错误码/HTTP 状态/失败类别/脱敏错误说明、请求异常）。隐私约束：不记录完整提示词、正文与 API Key；错误说明仅取 API 返回的失败信息并截断；日志目录被 `.gitignore` 排除。
 - 日志轮转：单文件超过 5MB 自动滚动为 `app.jsonl.1/.2/…`，保留最近 5 份；可用环境变量 `NOVEL_LOG_DIR`、`NOVEL_MAX_LOG_BYTES` 覆盖。
 - 分析脚本：`py -3.13 scripts/analyze_metrics.py`（终端报表：按 action/模型的成功率、平均/最大耗时、token、错误类型、最慢请求/生成）；`--json` 输出结构化数据便于程序化分析。
 

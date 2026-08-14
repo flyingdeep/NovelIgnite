@@ -133,6 +133,8 @@ def test_locked_chapter_context_is_readonly(client, monkeypatch):
     """Only the active chapter can be planned; locked chapter edits return 409."""
     monkeypatch.setattr("app.works.concept_service.build_adapters", lambda: {})
     monkeypatch.setattr("app.works.blueprint_service.build_adapters", lambda: {})
+    # 不依赖真实模型：workspace 场景/节拍生成走确定性 fallback。
+    monkeypatch.setattr("app.planning.workspace_service.build_adapters", lambda: {})
     raw = '{"chapters":[{"title":"第一章","goal":"g1"},{"title":"第二章","goal":"g2"}]}'
     monkeypatch.setattr("app.planning.service.build_adapters", lambda: {"deepseek": FakeModelAdapter(raw)})
     created = client.post("/api/v1/works", json={"title": "锁定章节"}).json()

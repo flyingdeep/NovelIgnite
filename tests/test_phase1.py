@@ -125,6 +125,67 @@ def test_fake_adapter_is_deterministic_and_records_parameters():
     assert adapter.calls[0]["json_mode"] is True
 
 
+def test_classify_error_reveals_real_failure_cause():
+    """LLM 调用失败能提取到真实原因（错误码/HTTP 状态/类别/脱敏说明）。"""
+    from app.infrastructure.model_adapter import _classify_error
+
+    def exc(name, **kw):
+        cls = type(name, (Exception,), {})
+        e = cls(kw.get("message", ""))
+        e.status_code = kw.get("status_code")
+        e.code = kw.get("code")
+        e.body = kw.get("body")
+        e.message = kw.get("message", "")
+        return e
+
+    # 超时
+    r = _classify_error(exc("APITimeoutError", message="Request timed out."))
+    assert r["error_category"] == "timeout" and r["error_type"] == "APITimeoutError"
+
+    # 合规性拒绝（内容策略）
+    r = _classify_error(exc("BadRequestError", status_code=400, code="content_filter",
+                            body={"error": {"code": "content_filter", "message": "The response was filtered due to the prompt triggering the content management policy"}}))
+    assert r["error_category"] == "content_policy"
+    assert r["http_status"] == 400
+    assert r["error_code"] == "content_filter"
+    assert "content management policy" in r["error_detail"]
+
+    # 普通参数错误（保留具体说明）
+    r = _classify_error(exc("BadRequestError", status_code=400, code="invalid_request_error",
+                            body={"error": {"code": "invalid_request_error", "message": "max_tokens must be <= 32768"}}))
+    assert r["error_category"] == "bad_request"
+    assert r["error_code"] == "invalid_request_error"
+    assert "max_tokens" in r["error_detail"]
+
+    # 限流 / 鉴权
+    assert _classify_error(exc("RateLimitError", status_code=429, message="Rate limit reached"))["error_category"] == "rate_limit"
+    assert _classify_error(exc("AuthenticationError", status_code=401, message="Invalid API key"))["error_category"] == "auth"
+
+    # 未知异常：detail 回退到 str(exc)，不崩溃
+    r = _classify_error(RuntimeError("boom"))
+    assert r["error_detail"] == "boom"
+
+
+def test_generation_failure_logs_real_cause():
+    """失败生成记录包含 error_code / http_status / error_category / error_detail。"""
+    import os
+    from app.infrastructure import observability
+
+    detail = "max_tokens must be <= 32768"
+    observability.record_generation("__probe_action__", "__probe_model__", succeeded=False, duration_ms=12.3,
+                                    error_type="BadRequestError", error_code="invalid_request_error",
+                                    http_status=400, error_category="bad_request", error_detail=detail)
+    log_path = os.path.join(os.environ.get("NOVEL_LOG_DIR", "logs"), "app.jsonl")
+    with open(log_path, encoding="utf-8") as handle:
+        last = json.loads(handle.read().strip().splitlines()[-1])
+    assert last["event"] == "generation"
+    assert last["status"] == "failed"
+    assert last["error_category"] == "bad_request"
+    assert last["http_status"] == 400
+    assert last["error_code"] == "invalid_request_error"
+    assert last["error_detail"] == detail
+
+
 def test_concept_candidate_edit_confirm_and_idea_lock(client, monkeypatch):
     monkeypatch.setattr("app.works.concept_service.build_adapters", lambda: {})
     created = client.post("/api/v1/works", json={"title": "Concept 流程"}).json()

@@ -52,6 +52,78 @@ def extract_json(text: str) -> Any:
         raise
 
 
+# 合规性拒绝/内容策略关键词（用于把 400 类错误归类为内容策略拒绝）。
+_CONTENT_POLICY_HINTS = ("content_filter", "content policy", "moderation", "refusal", "safety", "policy violation", "合规", "内容策略", "安全审查")
+
+
+def _classify_error(exc: Exception) -> dict[str, Any]:
+    """从模型 API 异常提取安全的失败原因，供可观测性记录。
+
+    返回 {error_type, error_code, http_status, error_category, error_detail}：
+    - error_type: 异常类名（如 BadRequestError / APITimeoutError）
+    - error_code: 提供商返回的错误码（body.error.code）
+    - http_status: HTTP 状态码（400/401/429/500...）
+    - error_category: 归类（timeout/connection/auth/rate_limit/content_policy/bad_request/...）
+    - error_detail: 脱敏、截断后的失败说明（仅 API 返回的错误信息，不含 prompt/正文/密钥）
+    """
+    error_type = type(exc).__name__
+    status = getattr(exc, "status_code", None)
+    code = getattr(exc, "code", None)
+    detail: str | None = None
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        err = body.get("error")
+        if isinstance(err, dict):
+            code = code or err.get("code")
+            msg = err.get("message")
+            if msg:
+                detail = str(msg)
+        elif body.get("message"):
+            detail = str(body["message"])
+    if not detail:
+        raw = getattr(exc, "message", None)
+        if raw:
+            detail = str(raw)
+    if not detail:
+        detail = str(exc) or None
+    if detail:
+        detail = "".join(ch for ch in detail if ch.isprintable()).strip()
+        detail = detail[:300]
+
+    category = "other"
+    if error_type in ("APITimeoutError", "Timeout", "ReadTimeout", "ConnectTimeout"):
+        category = "timeout"
+    elif error_type in ("APIConnectionError", "ConnectionError", "ConnectError"):
+        category = "connection"
+    elif error_type == "AuthenticationError":
+        category = "auth"
+    elif error_type == "PermissionDeniedError":
+        category = "permission"
+    elif error_type == "RateLimitError":
+        category = "rate_limit"
+    elif error_type in ("NotFoundError",):
+        category = "not_found"
+    elif error_type in ("InternalServerError",):
+        category = "server"
+    elif error_type in ("BadRequestError", "UnprocessableEntityError"):
+        low = (detail or "").lower()
+        code_low = str(code or "").lower()
+        if code_low in ("content_filter", "safety", "policy") or any(h in low for h in _CONTENT_POLICY_HINTS):
+            category = "content_policy"
+        else:
+            category = "bad_request"
+    elif error_type.endswith("Error") or error_type.endswith("Exception"):
+        category = "api"
+    return {
+        "error_type": error_type,
+        "error_code": code,
+        "http_status": status,
+        "error_category": category,
+        "error_detail": detail,
+    }
+
+
+
 class OpenAICompatibleAdapter:
     def __init__(self, spec: ModelSpec, *, timeout: float = 180):
         self.spec = spec
@@ -103,7 +175,7 @@ class OpenAICompatibleAdapter:
             return response.choices[0].message.content or ""
         except Exception as exc:
             duration_ms = (time.perf_counter() - start) * 1000
-            record_generation(action, self.spec.provider, succeeded=False, duration_ms=duration_ms, error_type=type(exc).__name__)
+            record_generation(action, self.spec.provider, succeeded=False, duration_ms=duration_ms, **_classify_error(exc))
             raise
 
 

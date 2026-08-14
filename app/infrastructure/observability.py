@@ -28,6 +28,7 @@ _metrics = {
     "requests": {"total": 0, "by_status": {}},
     "generations": {"total": 0, "succeeded": 0, "failed": 0, "ms_total": 0.0, "max_ms": 0.0, "by_action": {}, "by_model": {}},
     "errors": {},
+    "error_categories": {},
 }
 _recent: list[dict] = []
 
@@ -101,8 +102,13 @@ def _accumulate(counter: dict, key: str, duration_ms: float) -> None:
     return bucket
 
 
-def record_generation(action: str, model: str, *, succeeded: bool, duration_ms: float, tokens: dict | None = None, error_type: str | None = None) -> None:
-    """Record one model generation call (the core signal for LLM analysis)."""
+def record_generation(action: str, model: str, *, succeeded: bool, duration_ms: float, tokens: dict | None = None, error_type: str | None = None, error_code: str | None = None, http_status: int | None = None, error_category: str | None = None, error_detail: str | None = None) -> None:
+    """Record one model generation call (the core signal for LLM analysis).
+
+    On failure, error_type (exception class), error_code (provider error code),
+    http_status, error_category (timeout/content_policy/rate_limit/...) and a
+    truncated, sanitized error_detail are recorded so the real cause is traceable.
+    """
     with _lock:
         m = _metrics["generations"]
         m["total"] += 1
@@ -114,6 +120,8 @@ def record_generation(action: str, model: str, *, succeeded: bool, duration_ms: 
             m["failed"] += 1
             if error_type:
                 _bump(_metrics["errors"], error_type)
+            if error_category:
+                _bump(_metrics["error_categories"], error_category)
         act = _accumulate(m["by_action"], action, duration_ms)
         mod = _accumulate(m["by_model"], model, duration_ms)
         if succeeded:
@@ -130,6 +138,10 @@ def record_generation(action: str, model: str, *, succeeded: bool, duration_ms: 
         ms=round(duration_ms, 1),
         tokens=tokens,
         error_type=error_type,
+        error_code=error_code,
+        http_status=http_status,
+        error_category=error_category,
+        error_detail=error_detail,
     )
 
 
@@ -168,5 +180,6 @@ def snapshot() -> dict:
                 "by_model": _summarize(m["by_model"]),
             },
             "errors": dict(_metrics["errors"]),
+            "error_categories": dict(_metrics["error_categories"]),
             "recent_events": list(_recent[-50:]),
         }
