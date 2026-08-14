@@ -1682,7 +1682,7 @@ async function generateConcept(book) {
     await flushIdeaSave(book);
     showThinking("正在生成 Story Concept…", "AI 正在根据你的创意构建概念候选");
     try {
-      const result = await apiRequest(`/stories/${book.id}/generations`, { method: "POST", body: JSON.stringify({ action: "generate_concept" }) });
+      const result = await apiRequest(`/stories/${book.id}/generations`, { method: "POST", body: JSON.stringify({ action: "generate_concept" }), timeoutMs: 300000 });
       book.stage = "idea_locked";
       book.version = (book.version || 1) + 1;
       window.currentConceptVersion = result.artifact.version;
@@ -1691,7 +1691,7 @@ async function generateConcept(book) {
       if (version) version.textContent = `AI 候选 · v${result.artifact.version}`;
       showScreen("concept");
       toast("Story Concept 候选已生成。请编辑、锁定关键设定后确认。");
-    } catch (error) { toast("Concept 生成失败，原始创意未被修改。"); }
+    } catch (error) { toast(error && error.message === "请求超时" ? "概念生成请求超时（模型较慢），后台可能仍在生成，请稍后刷新查看结果。" : "Concept 生成失败，原始创意未被修改。"); }
     finally { hideThinking(); }
     return;
   }
@@ -1752,7 +1752,7 @@ function bindEvents() {
         // 确认后自动生成蓝图候选，无需用户再点「生成候选」
         showThinking("正在根据概念生成蓝图…", "AI 正在构建 Characters / World / Timeline / Arc");
         try {
-          const result = await apiRequest(`/stories/${book.id}/blueprint/generations`, { method: "POST", body: JSON.stringify({ action: "generate_blueprint" }) });
+          const result = await apiRequest(`/stories/${book.id}/blueprint/generations`, { method: "POST", body: JSON.stringify({ action: "generate_blueprint" }), timeoutMs: 300000 });
           result.artifacts.forEach((artifact) => { if (blueprintData[artifact.kind]) blueprintPayloadToUi(artifact.kind, artifact); });
           blueprintHasData = true;
           window.currentBlueprintVersions = Object.fromEntries(result.artifacts.map((artifact) => [artifact.kind, artifact.version]));
@@ -1773,7 +1773,7 @@ function bindEvents() {
     if (apiAvailable && book) {
       showThinking("正在生成四类蓝图候选…", "AI 正在构建 Characters / World / Timeline / Arc");
       try {
-        const result = await apiRequest(`/stories/${book.id}/blueprint/generations`, { method: "POST", body: JSON.stringify({ action: "generate_blueprint" }) });
+        const result = await apiRequest(`/stories/${book.id}/blueprint/generations`, { method: "POST", body: JSON.stringify({ action: "generate_blueprint" }), timeoutMs: 300000 });
         result.artifacts.forEach((artifact) => { if (blueprintData[artifact.kind]) blueprintPayloadToUi(artifact.kind, artifact); });
         blueprintHasData = true;
         window.currentBlueprintVersions = Object.fromEntries(result.artifacts.map((artifact) => [artifact.kind, artifact.version]));
@@ -1800,7 +1800,7 @@ function bindEvents() {
         // 确认后自动生成章节雏形，无需用户再点「生成章节雏形」
         showThinking("正在根据蓝图规划章节…", "AI 正在生成章节卡片与逐章激活");
         try {
-          const result = await apiRequest(`/stories/${book.id}/chapter-plan`, { method: "POST", body: JSON.stringify({ action: "generate_chapter_plan" }) });
+          const result = await apiRequest(`/stories/${book.id}/chapter-plan`, { method: "POST", body: JSON.stringify({ action: "generate_chapter_plan" }), timeoutMs: 300000 });
           book.stage = "chapter_planning";
           window.currentChapters = result.chapters;
           renderChaptersFromApi(result.chapters);
@@ -1828,7 +1828,7 @@ function bindEvents() {
     if (!apiAvailable || !book) { toast("当前没有可生成的作品。"); return; }
     showThinking("正在根据蓝图规划章节…", "AI 正在生成章节卡片与逐章激活");
     try {
-      const result = await apiRequest(`/stories/${book.id}/chapter-plan`, { method: "POST", body: JSON.stringify({ action: "generate_chapter_plan" }) });
+      const result = await apiRequest(`/stories/${book.id}/chapter-plan`, { method: "POST", body: JSON.stringify({ action: "generate_chapter_plan" }), timeoutMs: 300000 });
       book.stage = "chapter_planning";
       window.currentChapters = result.chapters;
       renderChaptersFromApi(result.chapters);
