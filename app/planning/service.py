@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.infrastructure.model_adapter import build_adapters, extract_json
+from app.infrastructure.prompts import prompt_version, system_prompt
 from app.planning.models import Chapter
 from app.planning.schemas import ChapterPlanGenerationRequest, ChapterPlanUpdate
 from app.works.concept_service import _model_for_config
@@ -94,11 +95,11 @@ def generate_chapter_plan(db: Session, story_id: str, request: ChapterPlanGenera
         raise HTTPException(status_code=409, detail="Blueprint must be confirmed before Chapter Plan generation")
     config = get_ai_config(db, story_id)
     spec = _model_for_config(request.model or config.model)
-    task = GenerationTask(story_id=story.id, action="generate_chapter_plan", target_type="story", model_snapshot=json.dumps({"model": config.model, "temperature": config.temperature, "reasoning_strength": config.reasoning_strength}, ensure_ascii=False), input_ref=json.dumps({"story_id": story.id, "blueprint": "confirmed"}, ensure_ascii=False), status="running")
+    task = GenerationTask(story_id=story.id, action="generate_chapter_plan", target_type="story", model_snapshot=json.dumps({"model": config.model, "temperature": config.temperature, "reasoning_strength": config.reasoning_strength}, ensure_ascii=False), prompt_version=prompt_version("generate_chapter_plan"), input_ref=json.dumps({"story_id": story.id, "blueprint": "confirmed"}, ensure_ascii=False), status="running")
     db.add(task)
     db.flush()
     messages = [
-        {"role": "system", "content": "你是小说章节规划助手。只返回合法 JSON 数组，每项必须包含 title、goal、summary、main_characters（数组）、arc_role。生成 6 章高层计划，不生成正文。"},
+        {"role": "system", "content": system_prompt("generate_chapter_plan")},
         {"role": "user", "content": f"根据已确认的故事蓝图生成章节计划。故事创意：{story.idea_text}"},
     ]
     try:

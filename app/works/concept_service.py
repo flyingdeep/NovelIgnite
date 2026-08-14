@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.infrastructure.model_adapter import ModelSpec, build_adapters
+from app.infrastructure.prompts import prompt_version, system_prompt
 from app.works.concept_schemas import ConceptConfirm, ConceptGenerationRequest, ConceptUpdate
 from app.works.models import GenerationTask, StoryArtifact
 from app.works.service import get_ai_config, get_story_or_404
@@ -96,13 +97,14 @@ def generate_concept(db: Session, story_id: str, request: ConceptGenerationReque
         action="generate_concept",
         target_type="story",
         model_snapshot=json.dumps({"model": config.model, "temperature": config.temperature, "reasoning_strength": config.reasoning_strength}, ensure_ascii=False),
+        prompt_version=prompt_version("generate_concept"),
         input_ref=json.dumps({"story_id": story.id, "idea_length": len(story.idea_text)}, ensure_ascii=False),
         status="running",
     )
     db.add(task)
     db.flush()
     messages = [
-        {"role": "system", "content": "你是小说策划助手。只返回合法 JSON，不要 markdown。字段必须包含 genre, style, length, viewpoint, summary, theme, conflict, selling_points（selling_points 必须是字符串数组，每项一句独立卖点）。严格依据作者创意展开，不得引入任何示例人物、既有故事设定或提示词之外的内容。"},
+        {"role": "system", "content": system_prompt("generate_concept")},
         {"role": "user", "content": f"请根据作者创意生成 Story Concept 候选。保留作者意图，不要把未确认内容当事实。作者创意：{story.idea_text}"},
     ]
     try:
@@ -186,6 +188,7 @@ def _generate_title_if_unnamed(db: Session, story) -> None:
         action="generate_title",
         target_type="story",
         model_snapshot=json.dumps({"model": config.model, "temperature": config.temperature, "reasoning_strength": config.reasoning_strength}, ensure_ascii=False),
+        prompt_version=prompt_version("generate_title"),
         input_ref=json.dumps({"story_id": story.id}, ensure_ascii=False),
         status="running",
     )
@@ -197,7 +200,7 @@ def _generate_title_if_unnamed(db: Session, story) -> None:
         concept = latest_concept(db, story.id)
         payload = _payload(concept) if concept else {}
         messages = [
-            {"role": "system", "content": "你是小说编辑。根据故事概念生成一个精炼的中文书名（2-8 字为宜，最多 20 字）。只返回合法 JSON：{\"title\":\"书名\"}，不要 markdown 或多余文字。"},
+            {"role": "system", "content": system_prompt("generate_title")},
             {"role": "user", "content": (
                 f"题材：{payload.get('genre', '')}\n"
                 f"风格：{payload.get('style', '')}\n"

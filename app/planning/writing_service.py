@@ -17,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.infrastructure.model_adapter import build_adapters, extract_json
+from app.infrastructure.prompts import prompt_version, system_prompt
 from app.planning.models import Beat, Chapter, ChapterEvent, ConsistencyIssue, ProseVersion, Scene, StateDelta, StateSnapshot
 from app.planning.workspace_schemas import ProseVersionCreate, ScenePlanGenerationRequest
 from app.planning.workspace_service import _require_active_chapter, get_beat, get_scene
@@ -135,7 +136,7 @@ def _build_generation_messages(db: Session, chapter: Chapter, scene: Scene, beat
             summaries.append(f"Scene {earlier.ordinal}「{earlier.title or ''}」：{earlier.summary}")
     prior_scenes_block = ("\n".join(summaries) + "\n\n") if summaries else ""
     return [
-        {"role": "system", "content": "你是小说正文写作助手。根据章节/场景/节拍计划与进入本章时的故事快照，写出符合要求的 Markdown 正文。只输出正文，不输出元信息。"},
+        {"role": "system", "content": system_prompt("generate_scene")},
         {"role": "user", "content": f"章节目标：{chapter.goal or ''}\n章节梗概：{chapter.summary or ''}\n当前场景：{scene.title or ''}（地点：{scene.location or ''} · 时间：{scene.time or ''} · POV：{scene.pov or ''}）\n场景目标：{scene.character_goals or ''}，冲突：{scene.conflict or ''}，关键事件：{scene.key_events or ''}，场景结果：{scene.scene_result or ''}\n当前节拍：{beat.name or ''}\n节拍指令：{beat.instruction or ''}\n\n故事快照（仅本章开始前已成立的事实）：{json.dumps(snapshot_state, ensure_ascii=False)[:2000]}\n\n前序已发生场景摘要（保持剧情连贯）：\n{prior_scenes_block}前序正文（若存在）：\n{prior_prose[:3000]}"},
     ]
 
@@ -152,6 +153,7 @@ def _record_task(db: Session, story_id: str, chapter: Chapter, scene: Scene | No
         target_type="beat" if beat else "scene" if scene else "chapter",
         target_id=(beat or scene or chapter).id,
         model_snapshot=json.dumps({"model": config.model, "temperature": config.temperature, "reasoning_strength": config.reasoning_strength}, ensure_ascii=False),
+        prompt_version=prompt_version(action),
         input_ref=json.dumps({"chapter_id": chapter.id, "scene_id": scene.id if scene else None, "beat_id": beat.id if beat else None}, ensure_ascii=False),
         status="running",
     )
@@ -219,7 +221,7 @@ def _ai_scene_summary(db: Session, scene: Scene, config) -> str:
     if adapter is None:
         return joined[:300]
     messages = [
-        {"role": "system", "content": "你是小说场景摘要助手。根据该场景的完整正文，生成一段 100-180 字的场景摘要，概括发生了什么、角色状态如何变化、为后续场景铺垫了什么。只输出摘要文本，不输出 JSON 或元信息。"},
+        {"role": "system", "content": system_prompt("scene_summary")},
         {"role": "user", "content": f"场景：{scene.title or ''}（地点：{scene.location or ''} · 时间：{scene.time or ''} · POV：{scene.pov or ''}）\n场景目标：{scene.character_goals or ''}，结果：{scene.scene_result or ''}\n\n正文：\n{joined[:4000]}"},
     ]
     try:
@@ -377,7 +379,7 @@ def _ai_extract_changes(db: Session, chapter: Chapter, scene: Scene, beat: Beat,
     if adapter is None:
         return None
     messages = [
-        {"role": "system", "content": "你是小说状态变化提取助手。根据正文与章节开始时的故事快照，提取正文推进后产生的状态变化。只返回合法 JSON，格式：{\"character_changes\": [{\"name\": \"角色名\", \"fields\": {\"key\": \"value\"}}], \"world_changes\": [{\"name\": \"条目名\", \"fields\": {\"key\": \"value\"}}], \"timeline_changes\": [{\"event\": \"事件描述\", \"scene\": \"场景标题\", \"note\": \"备注\"}]}。只提取正文中明确发生的、相对快照的新事实；没有变化就返回空数组。不要编造快照中不存在的内容。"},
+        {"role": "system", "content": system_prompt("extract_delta")},
         {"role": "user", "content": f"章节开始快照：{json.dumps(snapshot_state, ensure_ascii=False)[:2500]}\n\n场景：{scene.title or ''}\n节拍：{beat.name or f'Beat {beat.ordinal}'}\n\n正文：\n{markdown[:4000]}"},
     ]
     try:
@@ -446,7 +448,7 @@ def _ai_consistency_check(db: Session, chapter: Chapter, scene: Scene, beat: Bea
     if adapter is None:
         return []
     messages = [
-        {"role": "system", "content": "你是小说一致性检查助手。将正文与章节开始时的故事快照对比，找出矛盾：角色状态与快照冲突、时间线矛盾、已确认事实被违背、名称/关系不一致等。只返回合法 JSON 数组，每项 {\"rule\": \"规则名\", \"severity\": \"warning|error\", \"evidence\": \"具体矛盾描述\"}。没有矛盾返回 []。"},
+        {"role": "system", "content": system_prompt("consistency_check")},
         {"role": "user", "content": f"章节开始快照：{json.dumps(snapshot_state, ensure_ascii=False)[:2500]}\n\n场景：{scene.title or ''}\n节拍：{beat.name or f'Beat {beat.ordinal}'}\n\n正文：\n{markdown[:4000]}"},
     ]
     try:

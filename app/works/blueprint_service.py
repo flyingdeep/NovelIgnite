@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.infrastructure.model_adapter import build_adapters, configured_model_specs, extract_json
+from app.infrastructure.prompts import prompt_version, system_prompt
 from app.works.blueprint_schemas import BlueprintConfirm, BlueprintGenerationRequest, BlueprintUpdate
 from app.works.concept_service import _model_for_config
 from app.works.models import GenerationTask, StoryArtifact
@@ -75,11 +76,11 @@ def generate_blueprint(db: Session, story_id: str, request: BlueprintGenerationR
     spec = _model_for_config(request.model or config.model)
     concept = latest_blueprint(db, story_id, "concept")
     concept_payload = _json(concept, {})
-    task = GenerationTask(story_id=story.id, action="generate_blueprint", target_type="story", model_snapshot=json.dumps({"model": config.model, "temperature": config.temperature, "reasoning_strength": config.reasoning_strength}, ensure_ascii=False), input_ref=json.dumps({"story_id": story.id, "concept_version": concept.version if concept else None}, ensure_ascii=False), status="running")
+    task = GenerationTask(story_id=story.id, action="generate_blueprint", target_type="story", model_snapshot=json.dumps({"model": config.model, "temperature": config.temperature, "reasoning_strength": config.reasoning_strength}, ensure_ascii=False), prompt_version=prompt_version("generate_blueprint"), input_ref=json.dumps({"story_id": story.id, "concept_version": concept.version if concept else None}, ensure_ascii=False), status="running")
     db.add(task)
     db.flush()
     messages = [
-        {"role": "system", "content": "你是小说蓝图策划助手。只返回合法 JSON，顶层必须有 characters、world、timeline、arc 四个对象。每个对象包含 title 和 entries；每个 entry 包含 name、role、fields。"},
+        {"role": "system", "content": system_prompt("generate_blueprint")},
         {"role": "user", "content": f"根据已确认故事概念与作者创意生成全局 Blueprint。只生成稳定 Baseline，不生成章节状态。Concept：{json.dumps(concept_payload, ensure_ascii=False)} Idea：{story.idea_text}"},
     ]
     try:

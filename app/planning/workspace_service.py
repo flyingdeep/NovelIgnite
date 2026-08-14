@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.infrastructure.model_adapter import build_adapters, extract_json
+from app.infrastructure.prompts import prompt_version, system_prompt
 from app.planning.models import Beat, Chapter, ChapterEvent, Scene, StateSnapshot
 from app.planning.workspace_schemas import (
     BeatUpdate,
@@ -431,14 +432,14 @@ def generate_scene_plan(db: Session, story_id: str, chapter_id: str, request: Sc
     chapter = _require_active_chapter(db, story_id, chapter_id)
     config = get_ai_config(db, story_id)
     spec = _model_for_config(request.model or config.model)
-    task = GenerationTask(story_id=story.id, action=request.action, target_type="chapter", target_id=chapter.id, model_snapshot=json.dumps({"model": config.model, "temperature": config.temperature, "reasoning_strength": config.reasoning_strength}, ensure_ascii=False), input_ref=json.dumps({"chapter_id": chapter.id, "goal": chapter.goal}, ensure_ascii=False), status="running")
+    task = GenerationTask(story_id=story.id, action=request.action, target_type="chapter", target_id=chapter.id, model_snapshot=json.dumps({"model": config.model, "temperature": config.temperature, "reasoning_strength": config.reasoning_strength}, ensure_ascii=False), prompt_version=prompt_version(request.action), input_ref=json.dumps({"chapter_id": chapter.id, "goal": chapter.goal}, ensure_ascii=False), status="running")
     db.add(task)
     db.flush()
     try:
         adapter = build_adapters().get(spec.provider)
         if adapter and request.action == "generate_scene_plan":
             messages = [
-                {"role": "system", "content": "你是小说场景规划助手。只返回合法 JSON 数组，每项必须包含 title、location、time、pov、character_goals、conflict、key_events、scene_result、chapter_goal_relation。生成 3-4 个场景，不生成正文。"},
+                {"role": "system", "content": system_prompt("generate_scene_plan")},
                 {"role": "user", "content": f"根据章节计划生成场景计划。章节目标：{chapter.goal}。创意：{story.idea_text}"},
             ]
             raw = adapter.complete(messages, temperature=config.temperature, reasoning_strength=config.reasoning_strength, json_mode=True, action="generate_scene_plan")
@@ -471,7 +472,7 @@ def generate_beat_plan(db: Session, story_id: str, chapter_id: str, scene_id: st
     scene = get_scene(db, chapter.id, scene_id)
     config = get_ai_config(db, story_id)
     spec = _model_for_config(request.model or config.model)
-    task = GenerationTask(story_id=story.id, action=request.action, target_type="scene", target_id=scene.id, model_snapshot=json.dumps({"model": config.model, "temperature": config.temperature, "reasoning_strength": config.reasoning_strength}, ensure_ascii=False), input_ref=json.dumps({"scene_id": scene.id, "title": scene.title}, ensure_ascii=False), status="running")
+    task = GenerationTask(story_id=story.id, action=request.action, target_type="scene", target_id=scene.id, model_snapshot=json.dumps({"model": config.model, "temperature": config.temperature, "reasoning_strength": config.reasoning_strength}, ensure_ascii=False), prompt_version=prompt_version(request.action), input_ref=json.dumps({"scene_id": scene.id, "title": scene.title}, ensure_ascii=False), status="running")
     db.add(task)
     db.flush()
     try:
@@ -479,7 +480,7 @@ def generate_beat_plan(db: Session, story_id: str, chapter_id: str, scene_id: st
         beats_data: list[dict[str, Any]]
         if adapter and request.action == "generate_beat_plan":
             messages = [
-                {"role": "system", "content": "你是小说节拍规划助手。只返回合法 JSON 数组，每项必须包含 name 与 instruction。生成 4-6 个 Beat，不生成正文。"},
+                {"role": "system", "content": system_prompt("generate_beat_plan")},
                 {"role": "user", "content": f"根据场景计划生成节拍计划。场景：{scene.title}。场景目标：{scene.character_goals}。冲突：{scene.conflict}"},
             ]
             raw = adapter.complete(messages, temperature=config.temperature, reasoning_strength=config.reasoning_strength, json_mode=True, action="generate_beat_plan")

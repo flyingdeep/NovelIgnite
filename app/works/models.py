@@ -70,6 +70,7 @@ class GenerationTask(Base):
     target_type: Mapped[str] = mapped_column(String(40), default="story")
     target_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     model_snapshot: Mapped[str] = mapped_column(Text, default="{}")
+    prompt_version: Mapped[int] = mapped_column(Integer, default=1)
     input_ref: Mapped[str] = mapped_column(Text, default="{}")
     output_summary: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(30), default="queued")

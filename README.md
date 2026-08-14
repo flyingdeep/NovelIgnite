@@ -64,7 +64,8 @@ py -3.13 -m uvicorn app.main:app --reload
 
 - `.env` 只在服务端读取，不能提交到 Git。
 - 模型、Temperature 和推理强度可以通过作品级 AI 配置保存。
-- 每次生成任务记录模型参数快照，不记录密钥、完整提示词或正文全文。
+- **系统提示词集中管理**：所有生成任务的 system prompt 统一维护在 `app/infrastructure/prompts.py`（按 action 索引，含 `SYSTEM_PROMPTS` 与 `PROMPT_VERSIONS`）；修改一处全局生效，`system_prompt(action)` / `prompt_version(action)` 供服务层引用。
+- 每次生成任务记录模型参数快照与**所用提示词版本**（`generation_tasks.prompt_version`），不记录密钥、完整提示词或正文全文。
 - 无模型 Key 时使用可复现的 fallback / fake 流程进行离线开发和测试。
 
 ## 手工验收路径
@@ -84,6 +85,7 @@ py -3.13 -m uvicorn app.main:app --reload
 ## 可观测性
 
 - `GET /metrics`：JSON 指标快照（请求数/状态码分布、生成任务成功率/平均与最大耗时、按 action 与模型统计、错误类型计数、最近事件）。
+- 每次生成写入 `generation_tasks.prompt_version`（所用提示词版本号），与 `model_snapshot` 一起支持按版本追溯生成结果；提示词内容变更时在 `app/infrastructure/prompts.py` 递增对应版本号。
 - `logs/app.jsonl`：结构化 JSONL 日志（请求、生成调用：模型/耗时/token/状态/错误类型、请求异常）。隐私约束：不记录完整提示词、正文与 API Key；日志目录被 `.gitignore` 排除。
 - 日志轮转：单文件超过 5MB 自动滚动为 `app.jsonl.1/.2/…`，保留最近 5 份；可用环境变量 `NOVEL_LOG_DIR`、`NOVEL_MAX_LOG_BYTES` 覆盖。
 - 分析脚本：`py -3.13 scripts/analyze_metrics.py`（终端报表：按 action/模型的成功率、平均/最大耗时、token、错误类型、最慢请求/生成）；`--json` 输出结构化数据便于程序化分析。
@@ -147,7 +149,7 @@ py -3.13 -m pytest tests/e2e -v
 - `app/api/`：FastAPI 路由与 DTO。
 - `app/works/`：作品库、Concept、Blueprint、Living State 服务与模型。
 - `app/planning/`：Chapter Plan、Chapter Workspace（Snapshot/Events/Scenes/Beats）、写作服务（Prose/Delta/Consistency）。
-- `app/infrastructure/`：配置、SQLite、SQLAlchemy、模型适配器、可观测性（指标/日志）。
+- `app/infrastructure/`：配置、SQLite、SQLAlchemy、模型适配器、**提示词集中管理（`prompts.py`）**、可观测性（指标/日志）。
 - `app/lore/`：全局实体领域预留。
 - `app/writing/`：正文生成领域预留。
 - `app/consistency/`：Snapshot、Delta、一致性领域预留。

@@ -300,6 +300,55 @@ def test_chapter_plan_normalize_object_wrapper():
     assert _normalize_chapter_plan("not a list", "idea") is None
 
 
+# ---------------------------------------------------------------------------
+# 系统提示词集中管理（app/infrastructure/prompts.py）
+# ---------------------------------------------------------------------------
+
+ALL_GENERATION_ACTIONS = {
+    "generate_concept", "generate_title", "generate_blueprint", "generate_chapter_plan",
+    "generate_scene_plan", "generate_beat_plan", "generate_scene", "scene_summary",
+    "extract_delta", "consistency_check",
+}
+
+
+def test_prompts_module_covers_all_actions_and_versions():
+    """所有生成任务在 prompts.py 中都有系统提示词与版本号。"""
+    from app.infrastructure.prompts import PROMPT_VERSIONS, SYSTEM_PROMPTS, prompt_version, system_prompt
+
+    assert set(SYSTEM_PROMPTS) == set(PROMPT_VERSIONS)
+    assert set(SYSTEM_PROMPTS) == ALL_GENERATION_ACTIONS
+    for action in SYSTEM_PROMPTS:
+        assert system_prompt(action).strip(), f"{action} 缺少系统提示词"
+        assert prompt_version(action) >= 1, f"{action} 缺少提示词版本号"
+    # 未知 action 回退通用提示，不中断生成。
+    assert system_prompt("unknown_action").startswith("你是一个")
+    assert prompt_version("unknown_action") == 1
+
+
+def test_generation_task_records_prompt_version(client, monkeypatch, tmp_path):
+    """每次生成在 generation_tasks 记录所用提示词版本（prompt_version）。"""
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.orm import sessionmaker
+    from app.infrastructure.prompts import prompt_version
+
+    monkeypatch.setattr("app.works.concept_service.build_adapters", lambda: {})
+    created = client.post("/api/v1/works", json={"title": "提示词版本"}).json()
+    story_id = created["id"]
+    client.put(f"/api/v1/stories/{story_id}/idea", json={"idea_text": "一位能听见墙壁心跳的人。", "expected_version": created["version"]})
+    client.post(f"/api/v1/stories/{story_id}/generations", json={"action": "generate_concept"})
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'test.db'}", connect_args={"check_same_thread": False})
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    with Session() as db:
+        row = db.execute(
+            text("SELECT action, prompt_version, status FROM generation_tasks WHERE story_id = :sid ORDER BY created_at DESC LIMIT 1").bindparams(sid=story_id)
+        ).first()
+        assert row is not None
+        assert row.action == "generate_concept"
+        assert row.prompt_version == prompt_version("generate_concept") == 1
+        assert row.status == "succeeded"
+
+
 def test_chapter_plan_tolerates_object_wrapped_response(client, monkeypatch):
     monkeypatch.setattr("app.works.concept_service.build_adapters", lambda: {})
     monkeypatch.setattr("app.works.blueprint_service.build_adapters", lambda: {})

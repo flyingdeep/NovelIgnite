@@ -108,7 +108,7 @@
 
 <section id="ai"><h2>06 · AI 适配、上下文与生成设置 <span class="new">UPDATED</span></h2>
 <div class="grid g2">
-<article class="card"><h3>模型适配层契约</h3><ul><li>输入：任务类型、结构化上下文引用、参数快照（来自 AI 生成设置）、令牌预算。</li><li>输出：Pydantic 校验的结构化候选；解析失败标 failed。</li><li>支持 OpenAI Chat Completions 兼容端点；密钥仅服务端环境读取。</li><li>超时、网络错误、无效 JSON 均保留作者草稿，可重试。</li></ul></article>
+<article class="card"><h3>模型适配层契约</h3><ul><li>输入：任务类型、结构化上下文引用、参数快照（来自 AI 生成设置）、令牌预算。</li><li>输出：Pydantic 校验的结构化候选；解析失败标 failed。</li><li>支持 OpenAI Chat Completions 兼容端点；密钥仅服务端环境读取。</li><li>超时、网络错误、无效 JSON 均保留作者草稿，可重试。</li><li><span class="new">NEW</span> 系统提示词集中管理：全部 system prompt 与版本号集中在 <code>app/infrastructure/prompts.py</code>（按 action 索引）；每次生成在 <code>generation_tasks.prompt_version</code> 记录所用提示词版本，与 <code>model_snapshot</code> 一起支持追溯。</li></ul></article>
 <article class="card"><h3>统一 AI 生成设置 <span class="new">NEW</span></h3><ul><li>作者可随时通过「⚙ 生成设置」配置模型、Temperature、推理强度。</li><li>配置跨任务生效，但每次生成时会记录参数快照至 generation_tasks.model_snapshot。</li><li>配置入口置于每个有生成操作的页面（创意、概念、蓝图、章节、工作台）。</li></ul></article></div>
 <table style="margin-top:16px"><thead><tr><th>上下文装配算法</th><th>规则</th></tr></thead><tbody>
 <tr><td>1. 确定时间边界</td><td>当前 Chapter ordinal - 1。</td></tr>
