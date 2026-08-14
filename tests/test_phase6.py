@@ -261,6 +261,21 @@ def test_story_reader_returns_continuous_prose(client, monkeypatch):
     assert all(not s["beats"] for s in ch2["scenes"])
 
 
+def test_confirm_delta_rejected_when_chapter_incomplete(client, monkeypatch):
+    """Confirming a chapter with unwritten scenes/beats returns 409 (integrity gate)."""
+    story_id, chapter, scenes = _setup_chapter_with_scenes(client, monkeypatch)
+    # Only generate prose for the FIRST scene; later scenes stay unwritten.
+    scene = scenes[0]
+    client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/generations", json={"action": "generate_scene"})
+    # Confirm must be rejected because other scenes' beats have no applied prose.
+    r = client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/deltas/confirm", json={})
+    assert r.status_code == 409
+    assert "尚未全部完成" in r.json()["detail"]
+    # Chapter remains active.
+    ch = client.get(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}").json()
+    assert ch["access_status"] == "active"
+
+
 def test_mark_subsequent_stale_after_historical_change(client, monkeypatch, tmp_path):
     """Changing an earlier chapter marks later chapter snapshots stale."""
     from sqlalchemy import create_engine

@@ -404,6 +404,22 @@ def confirm_chapter_delta(db: Session, story_id: str, chapter_id: str, expected_
         raise HTTPException(status_code=404, detail="Chapter not found")
     if chapter.access_status != "active":
         raise HTTPException(status_code=409, detail="Chapter is not active")
+    # Integrity gate: every scene's every beat must have applied prose before a
+    # chapter can be confirmed. This prevents "completed" chapters with missing
+    # scenes (a historical bug where partial scenes were confirmed).
+    scenes = list(db.scalars(select(Scene).where(Scene.chapter_id == chapter.id).order_by(Scene.ordinal)))
+    if not scenes:
+        raise HTTPException(status_code=409, detail="Chapter has no scenes; generate a scene plan first")
+    missing: list[str] = []
+    for scene in scenes:
+        beats = list(db.scalars(select(Beat).where(Beat.scene_id == scene.id).order_by(Beat.ordinal)))
+        for beat in beats:
+            applied = db.scalar(select(ProseVersion).where(ProseVersion.beat_id == beat.id, ProseVersion.status == "applied"))
+            if applied is None:
+                missing.append(f"场景 {scene.ordinal}「{scene.title or ''}」Beat {beat.ordinal}「{beat.name or ''}」")
+    if missing:
+        detail = "；".join(missing[:10])
+        raise HTTPException(status_code=409, detail=f"Chapter 尚未全部完成，不能确认 Delta：{detail}")
     delta = db.scalar(select(StateDelta).where(StateDelta.scope_type == "chapter", StateDelta.scope_id == chapter.id))
     if delta is None:
         delta = build_chapter_delta(db, story_id, chapter)

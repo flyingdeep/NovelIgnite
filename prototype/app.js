@@ -1078,7 +1078,15 @@ async function loadWorkspaceContext() {
     if (!chapterId) {
       const chapters = await apiRequest(`/stories/${book.id}/chapters`);
       const active = chapters.find((chapter) => chapter.access_status === "active");
-      chapterId = active ? active.id : null;
+      if (active) {
+        chapterId = active.id;
+      } else {
+        // No active chapter (e.g. novel finished): fall back to the last-viewed
+        // chapter, else the first chapter, so completed chapters stay readable.
+        const saved = localStorage.getItem(`novel-ignite:last-chapter:${book.id}`);
+        const savedChapter = chapters.find((c) => c.id === saved);
+        chapterId = savedChapter ? savedChapter.id : (chapters[0] ? chapters[0].id : null);
+      }
       currentActiveChapterId = chapterId;
     }
     if (!chapterId) {
@@ -1087,6 +1095,8 @@ async function loadWorkspaceContext() {
       document.querySelector("#scene-items").innerHTML = "";
       return;
     }
+    // Remember this chapter so the next workspace visit restores it.
+    localStorage.setItem(`novel-ignite:last-chapter:${book.id}`, chapterId);
     let context = await apiRequest(`/stories/${book.id}/chapters/${chapterId}/context`, { timeoutMs: 60000 });
     // Phase 5/6 improvement: when entering the active chapter's workspace, auto-generate
     // the scene plan and beat plans in the loading phase — no manual click needed.
@@ -1193,27 +1203,54 @@ function renderReaderToc(chapters) {
   document.querySelector("#reader-chapter-count").textContent = `${chapters.length} 章`;
   if (!chapters.length) { list.innerHTML = `<div class="reader-empty" style="padding:16px 8px"><p>暂无章节</p></div>`; return; }
   list.innerHTML = chapters.map((c) => {
-    const beatCount = (c.scenes || []).reduce((n, s) => n + (s.beats || []).length, 0);
-    const hasProse = (c.scenes || []).some((s) => (s.beats || []).length);
-    const statusTag = c.access_status === "completed" ? `<small style="color:#4ade80">✓ 已完成 · ${beatCount} 段</small>` : (hasProse ? `<small>进行中 · ${beatCount} 段</small>` : `<small>尚未写作</small>`);
-    const sceneAnchors = (c.scenes || []).filter((s) => (s.beats || []).length).map((s) => `<span class="scene-anchor" data-read-scene="${c.id}|${s.id}">${s.ordinal}</span>`).join("");
-    return `<button class="reader-chapter-link ${c.id === readerActiveChapter ? "active" : ""}" type="button" data-read-chapter="${c.id}"><b>第 ${c.ordinal} 章 · ${c.title || "未命名"}</b>${statusTag}${sceneAnchors ? `<span class="scene-anchors">${sceneAnchors}</span>` : ""}</button>`;
+    const allScenes = c.scenes || [];
+    const written = allScenes.reduce((n, s) => n + (s.beats || []).length, 0);
+    const writtenScenes = allScenes.filter((s) => (s.beats || []).length).length;
+    const done = c.access_status === "completed";
+    // Scene list: every scene as a row with its literary title; unwritten scenes show a hint.
+    const sceneRows = allScenes.map((s) => {
+      const has = (s.beats || []).length > 0;
+      const count = (s.beats || []).length;
+      return `<button class="reader-scene-row ${c.id === readerActiveChapter && s.id === readerActiveScene ? "current" : ""}" type="button" data-read-scene="${c.id}|${s.id}">
+        <span class="reader-scene-no">${s.ordinal}</span>
+        <span class="reader-scene-title">${escapeHtml(s.title || `场景 ${s.ordinal}`)}</span>
+        ${has ? `<span class="reader-scene-count">${count} 段</span>` : `<span class="reader-scene-missing">未写作</span>`}
+      </button>`;
+    }).join("");
+    return `<div class="reader-chapter-block ${c.id === readerActiveChapter ? "active" : ""}">
+      <button class="reader-chapter-link" type="button" data-read-chapter="${c.id}">
+        <b>第 ${c.ordinal} 章 · ${escapeHtml(c.title || "未命名")}</b>
+        <small style="color:${done ? "#4ade80" : "#8fa6c8"}">${done ? "✓ 已完成" : "进行中"} · 已写 ${written} 段 / ${writtenScenes} 个场景</small>
+      </button>
+      <div class="reader-scene-list">${sceneRows}</div>
+    </div>`;
   }).join("");
 }
 
 function renderReaderChapter(chapter) {
   readerActiveChapter = chapter.id;
   const content = document.querySelector("#reader-content");
-  const scenes = (chapter.scenes || []).filter((s) => (s.beats || []).length);
-  const beatsTotal = scenes.reduce((n, s) => n + s.beats.length, 0);
+  const allScenes = chapter.scenes || [];
+  const writtenScenes = allScenes.filter((s) => (s.beats || []).length);
+  const beatsTotal = writtenScenes.reduce((n, s) => n + s.beats.length, 0);
   document.querySelector("#read-title").textContent = `${chapter.title || "未命名章节"}`;
-  document.querySelectorAll(".reader-chapter-link").forEach((el) => el.classList.toggle("active", el.dataset.readChapter === chapter.id));
-  if (!scenes.length) {
+  document.querySelectorAll(".reader-chapter-block").forEach((el) => {
+    const link = el.querySelector("[data-read-chapter]");
+    el.classList.toggle("active", link && link.dataset.readChapter === chapter.id);
+  });
+  if (!writtenScenes.length) {
     content.innerHTML = `<div class="reader-empty"><h3>本章暂无正文</h3><p>完成本章写作并确认 Delta 后即可阅读。</p></div>`;
     return;
   }
-  const scenesHtml = scenes.map((scene) => {
+  const scenesHtml = allScenes.map((scene) => {
     const sub = [scene.location, scene.time].filter(Boolean).join(" · ");
+    const has = (scene.beats || []).length > 0;
+    if (!has) {
+      return `<section class="reader-scene-section" id="scene-${chapter.id}-${scene.id}">
+        <h3>${escapeHtml(scene.title || `场景 ${scene.ordinal}`)}</h3>${sub ? `<p class="reader-scene-sub">${escapeHtml(sub)}</p>` : ""}
+        <div class="reader-scene-unwritten"><p>（本章节尚未写作正文）</p></div>
+      </section>`;
+    }
     const proseHtml = scene.beats.map((b) => `<div class="reader-prose"><p>${escapeHtml(b.markdown || "")}</p></div>`).join("");
     return `<section class="reader-scene-section" id="scene-${chapter.id}-${scene.id}">
       <h3>${escapeHtml(scene.title || `场景 ${scene.ordinal}`)}</h3>${sub ? `<p class="reader-scene-sub">${escapeHtml(sub)}</p>` : ""}
@@ -1222,7 +1259,7 @@ function renderReaderChapter(chapter) {
   }).join("");
   content.innerHTML = `
     <h2>第 ${chapter.ordinal} 章 · ${escapeHtml(chapter.title || "未命名章节")}</h2>
-    <p class="reader-chapter-meta">${beatsTotal} 段正文 · ${scenes.length} 个场景 · 已确认 Delta 后投影</p>
+    <p class="reader-chapter-meta">已写 ${beatsTotal} 段正文 · ${allScenes.length} 个场景（${writtenScenes.length} 个已写作）</p>
     ${scenesHtml}`;
   // Reset any pending scene anchor.
   readerActiveScene = null;
