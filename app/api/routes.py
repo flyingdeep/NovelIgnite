@@ -43,6 +43,7 @@ from app.planning.workspace_service import (
 )
 from app.planning.writing_service import (
     apply_beat_prose,
+    backfill_missing_prose,
     build_chapter_delta,
     confirm_chapter_delta,
     delta_response,
@@ -238,6 +239,16 @@ def post_scene_beat_generation(story_id: str, chapter_id: str, scene_id: str, pa
         pv = regenerate_beat(db, story_id, chapter_id, scene_id, payload.beat_id, payload)
         return {"status": "succeeded", "prose_version": prose_response(pv)}
     raise HTTPException(status_code=422, detail="Unsupported action for scene generation")
+
+
+@router.post("/stories/{story_id}/chapters/{chapter_id}/backfill")
+def post_chapter_backfill(story_id: str, chapter_id: str, payload: ScenePlanGenerationRequest, db: Session = Depends(get_db)):
+    """Backfill missing beat prose in a (possibly completed) chapter.
+
+    Uses the chapter's entry snapshot as context; marks later chapters stale.
+    """
+    produced = backfill_missing_prose(db, story_id, chapter_id, payload)
+    return {"status": "succeeded", "prose_versions": [prose_response(p) for p in produced]}
 
 
 # --- Phase 6: prose versions, deltas, consistency ---

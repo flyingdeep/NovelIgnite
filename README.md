@@ -123,7 +123,7 @@ py -3.13 -m alembic upgrade head
 py -3.13 -m pytest -q
 ```
 
-当前回归结果：**45 passed**。覆盖作品库、Idea 锁定、AI 配置、三模型适配（含思考/推理参数与官方 max token）、Concept 候选/确认与卖点规范化、Blueprint 四分类全条目渲染、Living State 初始投影、Chapter Plan 逐章激活与锁定章节保护、标题生成、可观测性指标（Phase 1–4）；Chapter Workspace 快照/上下文、Scene / Beat 规划与乐观锁、正文自动应用与版本追溯、Chapter Delta 确认（含完整性校验）与 Living State 版本递增、一致性检查、全书阅读模式数据（Phase 5–6）；以及 Playwright 端到端冒烟（E2E）。
+当前回归结果：**46 passed**。覆盖作品库、Idea 锁定、AI 配置、三模型适配（含思考/推理参数与官方 max token）、Concept 候选/确认与卖点规范化、Blueprint 四分类全条目渲染、Living State 初始投影、Chapter Plan 逐章激活与锁定章节保护、标题生成、可观测性指标（Phase 1–4）；Chapter Workspace 快照/上下文、Scene / Beat 规划与乐观锁、正文自动应用与版本追溯、Chapter Delta 确认（含完整性校验）、缺失正文补全、Living State 版本递增、一致性检查、全书阅读模式数据（Phase 5–6）；以及 Playwright 端到端冒烟（E2E）。
 
 ## 目录
 

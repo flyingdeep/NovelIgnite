@@ -276,6 +276,33 @@ def test_confirm_delta_rejected_when_chapter_incomplete(client, monkeypatch):
     assert ch["access_status"] == "active"
 
 
+def test_backfill_completes_incomplete_chapter(client, monkeypatch):
+    """Backfill writes missing beat prose (using the chapter's entry snapshot)."""
+    story_id, chapter, scenes = _setup_chapter_with_scenes(client, monkeypatch)
+    scene = scenes[0]
+    # Generate only the first scene; the chapter stays incomplete.
+    client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/generations", json={"action": "generate_scene"})
+    # Backfill the whole chapter.
+    r = client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/backfill", json={"action": "generate_scene"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "succeeded"
+    assert len(body["prose_versions"]) > 0
+    # Every beat now has applied prose.
+    context = client.get(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/context").json()
+    total = 0
+    written = 0
+    for sc in context["scenes"]:
+        for b in sc["beats"]:
+            total += 1
+            if b.get("latest_prose") and b["latest_prose"]["status"] == "applied":
+                written += 1
+    assert written == total, f"expected {total} applied beats, got {written}"
+    # The chapter can now be confirmed.
+    confirm = client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/deltas/confirm", json={})
+    assert confirm.status_code == 200
+
+
 def test_mark_subsequent_stale_after_historical_change(client, monkeypatch, tmp_path):
     """Changing an earlier chapter marks later chapter snapshots stale."""
     from sqlalchemy import create_engine

@@ -271,6 +271,44 @@ def generate_single_beat(db: Session, story_id: str, chapter_id: str, scene_id: 
     return _generate_beat(db, story_id, chapter, scene, beat, config, request)
 
 
+def backfill_missing_prose(db: Session, story_id: str, chapter_id: str, request: ScenePlanGenerationRequest) -> list[ProseVersion]:
+    """Backfill missing beat prose in a (possibly completed) chapter.
+
+    Generates prose for every beat that has no applied version yet, using the
+    chapter's ENTRY snapshot as context (never later-chapter state), so the
+    newly written prose stays consistent with what was known at that chapter's
+    start. After writing, later chapters' snapshots are marked stale because a
+    historical chapter's facts changed.
+    """
+    from app.planning.service import get_chapter
+    from app.works.service import get_story_or_404
+
+    story = get_story_or_404(db, story_id)
+    chapter = get_chapter(db, story_id, chapter_id)
+    if chapter.access_status not in ("active", "completed"):
+        raise HTTPException(status_code=409, detail="Only active or completed chapters can be backfilled")
+    config = get_ai_config(db, story_id)
+    scenes = list(db.scalars(select(Scene).where(Scene.chapter_id == chapter.id).order_by(Scene.ordinal)))
+    produced: list[ProseVersion] = []
+    for scene in scenes:
+        beats = list(db.scalars(select(Beat).where(Beat.scene_id == scene.id).order_by(Beat.ordinal)))
+        for beat in beats:
+            if beat.status in FINISHED_BEAT_STATUSES:
+                continue
+            existing = latest_prose(db, beat.id)
+            if existing is not None and existing.status == "applied":
+                continue
+            pv = _generate_beat(db, story_id, chapter, scene, beat, config, request)
+            produced.append(pv)
+        _complete_scene_if_done(db, scene)
+    if produced:
+        mark_subsequent_stale(db, story_id, chapter.ordinal)
+        db.commit()
+        for pv in produced:
+            db.refresh(pv)
+    return produced
+
+
 # ---------------------------------------------------------------------------
 # Delta extraction & consistency checkpoints
 # ---------------------------------------------------------------------------

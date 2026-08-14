@@ -949,10 +949,18 @@ function renderWorkspaceFromContext(context) {
   const chapter = context.chapter;
   const scenesData = context.scenes || [];
   const readOnly = chapter.access_status === "completed";
+  // Chapter-wide missing prose count (any beat without an applied version).
+  const chapterMissing = scenesData.reduce((n, s) => n + (s.beats || []).filter((b) => b.status !== "applied" && b.status !== "completed" && !(b.latest_prose && b.latest_prose.status === "applied")).length, 0);
   const wsHeading = document.querySelector(".workspace-heading .title-with-actions h1");
   if (wsHeading) wsHeading.textContent = `Chapter ${String(chapter.ordinal).padStart(2, "0")} · ${chapter.title || ""}${readOnly ? "（已完成）" : ""}`;
   document.querySelector(".rail-head h3").textContent = chapter.title || `第 ${chapter.ordinal} 章`;
   document.querySelector(".rail-head b").textContent = `CHAPTER ${String(chapter.ordinal).padStart(2, "0")}`;
+  // Read-only completed chapters: offer a chapter-level backfill when prose is missing.
+  const backfillBtn = readOnly && chapterMissing > 0
+    ? `<button class="secondary-button backfill-chapter" type="button" style="margin:8px 12px 4px;width:calc(100% - 24px)">补全本章缺失正文（${chapterMissing} 段）→</button>`
+    : "";
+  const railFooter = document.querySelector(".rail-footer");
+  if (railFooter) railFooter.innerHTML = backfillBtn + `<button class="text-button" type="button" id="show-context">▣ 查看 Chapter Context</button>`;
   const railGoal = document.querySelector(".rail-head p");
   if (railGoal) railGoal.textContent = chapter.goal ? `目标：${chapter.goal}` : "";
   // Disable the top-level "generate whole chapter" button in read-only mode.
@@ -1286,7 +1294,44 @@ function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
 }
 
+async function handleBackfillClick() {
+  const book = currentBook();
+  if (!apiAvailable || !book || !currentActiveChapterId) { toast("需要激活章节。"); return; }
+  showThinking("正在补全本章缺失正文…", "使用本章入口 Snapshot 作为上下文，避免与后续章节错乱");
+  try {
+    const result = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/backfill`, { method: "POST", body: JSON.stringify({ action: "generate_scene" }), timeoutMs: 600000 });
+    const n = (result.prose_versions || []).length;
+    currentWorkspaceContext = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/context`, { timeoutMs: 60000 });
+    renderWorkspace();
+    toast(n ? `已补全 ${n} 段缺失正文（基于本章入口快照生成，后续章节已标记待重算）。` : "本章已无缺失正文。");
+  } catch (error) {
+    setThinkingProgress(null);
+    try {
+      currentWorkspaceContext = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/context`, { timeoutMs: 60000 });
+      renderWorkspace();
+    } catch (e) { /* keep previous render */ }
+    toast("补全失败，请稍后重试。");
+  }
+  finally { hideThinking(); }
+}
+
 function bindWorkspaceEvents() {
+  // Rail footer is re-rendered each context load; use delegation so the
+  // context-modal and backfill buttons keep working after re-render.
+  const railFooter = document.querySelector(".rail-footer");
+  if (railFooter && !railFooter.dataset.bound) {
+    railFooter.dataset.bound = "1";
+    railFooter.addEventListener("click", (event) => {
+      if (event.target.closest("#show-context")) {
+        const modal = document.querySelector("#state-modal");
+        if (modal) { modal.hidden = false; modal.style.display = "grid"; document.body.style.overflow = "hidden"; }
+        return;
+      }
+      if (event.target.closest(".backfill-chapter")) {
+        handleBackfillClick();
+      }
+    });
+  }
   document.querySelectorAll(".scene-item[data-scene]").forEach((button) => button.addEventListener("click", () => {
     activeScene = button.dataset.scene;
     renderWorkspace();
@@ -1360,6 +1405,7 @@ function bindWorkspaceEvents() {
     finally { hideThinking(); }
   }));
   // Phase 6: complete the rest of the chapter (beat by beat with live progress)
+  // (backfill-chapter click is handled via rail-footer delegation -> handleBackfillClick)
   document.querySelectorAll(".generate-chapter-remaining").forEach((button) => button.addEventListener("click", async () => {
     const book = currentBook();
     if (!apiAvailable || !book || !currentActiveChapterId) { toast("需要激活章节。"); return; }
