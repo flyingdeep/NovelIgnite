@@ -384,6 +384,9 @@ let generatedBeat = false;
 let toastTimer;
 let aiConfig = { model: "DeepSeek V4 Flash", temperature: 0.7, reasoning: "medium", version: 1 };
 let blueprintHasData = false;
+// Phase 5 workspace state: real API context when available
+let currentWorkspaceContext = null;
+let currentActiveChapterId = null;
 const API_BASE = "/api/v1";
 let apiAvailable = false;
 
@@ -498,6 +501,39 @@ function blueprintPayloadToUi(kind, artifact) {
   });
 }
 
+function livingPayloadToUi(artifact) {
+  // Render Living State from the real living_state artifact (domains projection), never demo data.
+  const payload = artifact?.payload || {};
+  const domains = payload.domains || {};
+  const confirmed = payload.certainty || "confirmed";
+  const domainMeta = [
+    ["characters", "角色状态", `当前快照 · ${confirmed}`],
+    ["world", "世界状态", "当前快照 · confirmed / proposed"],
+    ["timeline", "时间线状态", "当前快照 · confirmed"],
+  ];
+  const entries = [];
+  for (const [key, title, role] of domainMeta) {
+    const state = domains[key]?.state || {};
+    const list = Array.isArray(state.entries) ? state.entries : [];
+    const fields = list.map((entry) => {
+      const f = entry.fields || {};
+      const lines = Object.entries(f).map(([k, v]) => `${k}：${Array.isArray(v) ? v.join("；") : v}`);
+      return [entry.name || key, lines.join("；") || "（无明细）"];
+    });
+    entries.push({
+      name: title,
+      role,
+      lock: "",
+      version: artifact.version,
+      updated: artifact.updated_at?.slice(0, 10) || "刚刚",
+      fields,
+      history: [{ version: `v${artifact.version}`, date: artifact.updated_at?.slice(0, 10) || "刚刚", by: "系统投影", note: "来自真实 Living State", detail: `当前 Living State v${artifact.version}，由已确认 Chapter Delta 更新。` }],
+    });
+  }
+  blueprintData.living.entries = entries;
+  blueprintData.living.version = artifact.version || 1;
+}
+
 async function loadBlueprintForCurrentStory() {
   const book = currentBook();
   if (!apiAvailable || !book) return;
@@ -509,6 +545,10 @@ async function loadBlueprintForCurrentStory() {
     if (hasAny) {
       Object.entries(data).forEach(([kind, artifact]) => { if (artifact && blueprintData[kind]) blueprintPayloadToUi(kind, artifact); });
       ["characters", "world", "timeline", "arc"].forEach((kind) => { if (data[kind]) window.currentBlueprintVersions[kind] = data[kind].version; });
+    }
+    const living = data.living_state;
+    if (living && living.payload && living.payload.domains) {
+      livingPayloadToUi(living);
     }
     const confirmed = ["characters", "world", "timeline", "arc"].every((kind) => data[kind]?.status === "confirmed");
     document.querySelector("#confirm-blueprint").style.display = confirmed ? "none" : "";
@@ -543,7 +583,7 @@ function toast(message) {
 function showScreen(id) {
   document.querySelectorAll(".screen").forEach((screen) => screen.classList.toggle("active", screen.id === id));
   document.querySelectorAll("[data-nav]").forEach((button) => button.classList.toggle("active", button.dataset.nav === id));
-  if (id === "workspace") renderWorkspace();
+  if (id === "workspace") loadWorkspaceContext();
   if (id === "works") renderBooks();
   if (id === "idea") renderIdea();
   if (id === "concept") loadConceptForCurrentStory();
@@ -733,11 +773,33 @@ function hideModal(selector) {
   document.body.style.overflow = "";
 }
 
-function openHistory(kind, index) {
+async function openHistory(kind, index) {
   const entry = blueprintData[kind].entries[index];
   document.querySelector("#history-title").textContent = `更新履历 · ${entry.name}`;
   document.querySelector("#history-subtitle").textContent = `${blueprintData[kind].title} · 当前为最新版本 v${entry.version}`;
-  document.querySelector("#history-list").innerHTML = entry.history.map((item) => `
+  let history = entry.history || [];
+  if (kind === "living" && apiAvailable && currentBook()) {
+    try {
+      const versions = await apiRequest(`/stories/${currentBook().id}/living-state/history`);
+      if (Array.isArray(versions) && versions.length) {
+        history = versions.map((v) => {
+          const confirmed = (v.payload && v.payload.confirmed_deltas) || [];
+          const domains = (v.payload && v.payload.domains) || {};
+          const cCount = (domains.characters?.state?.entries || []).length;
+          const wCount = (domains.world?.state?.entries || []).length;
+          const tCount = (domains.timeline?.state?.entries || []).length;
+          const ch = v.version === 1 ? "初始投影（蓝图确认）" : `第 ${v.payload?.last_confirmed_chapter ?? "?"} 章 Delta 确认`;
+          const detail = v.version === 1
+            ? `Living State v${v.version}：由已确认 Blueprint 投影初始世界状态（角色 ${cCount} / 世界 ${wCount} / 时间线 ${tCount} 条）。`
+            : `本章确认后投影：已确认 Delta ${confirmed.length} 条（角色 ${cCount} / 世界 ${wCount} / 时间线 ${tCount} 条）。`;
+          return { version: `v${v.version}`, date: (v.updated_at || "").slice(0, 10) || "刚刚", by: "系统投影", note: ch, detail };
+        });
+      }
+    } catch (error) {
+      // History endpoint unavailable: keep the current single entry.
+    }
+  }
+  document.querySelector("#history-list").innerHTML = history.map((item) => `
     <div class="history-item">
       <div class="history-head"><span class="tag blue">${item.version}</span><b>${item.note}</b><small>${item.date} · ${item.by}</small></div>
       <p>${item.detail}</p>
@@ -816,17 +878,26 @@ async function loadChaptersForCurrentStory() {
 }
 
 function renderChaptersFromApi(items) {
+  const active = items.find((chapter) => chapter.access_status === "active");
+  const note = document.querySelector("#chapter-plan-note");
+  if (note) note.textContent = active ? `已生成 · 第 ${active.ordinal} 章已激活` : "已生成章节计划";
   document.querySelector("#chapter-grid").innerHTML = items.map((chapter) => {
-    const active = chapter.access_status === "active";
-    return `<article class="chapter-card ${active ? "active" : "locked"}">
+    const isActive = chapter.access_status === "active";
+    const done = chapter.access_status === "completed";
+    const statusClass = isActive ? "blue" : done ? "green" : "";
+    const statusText = isActive ? "可进入 · 当前章" : done ? "✓ 已完成" : "🔒 未激活 · 雏形";
+    const btnClass = isActive ? "primary-button" : "secondary-button";
+    const btnText = isActive ? "进入工作台 →" : done ? "查看已完成章节" : "查看计划雏形";
+    const btnAction = isActive ? "data-nav=\"workspace\"" : done ? `data-chapter-id="${chapter.id}"` : "data-toast=\"后序章节保持锁定，完成当前章并确认 Chapter Delta 后才会激活。\"";
+    return `<article class="chapter-card ${isActive ? "active" : done ? "done" : "locked"}">
       <span class="chapter-number">CHAPTER ${String(chapter.ordinal).padStart(2, "0")}</span>
-      <span class="tag ${active ? "blue" : ""}">${active ? "可进入 · 当前章" : "🔒 未激活 · 雏形"}</span>
+      <span class="tag ${statusClass}">${statusText}</span>
       <h3>${chapter.title}</h3><p>${chapter.goal || chapter.summary}</p>
-      <button class="${active ? "primary-button" : "secondary-button"}" type="button" ${active ? "data-nav=\"workspace\"" : "data-toast=\"后序章节保持锁定，完成当前章并确认 Chapter Delta 后才会激活。\""}>${active ? "进入工作台 →" : "查看计划雏形"}</button>
+      <button class="${btnClass}" type="button" ${btnAction}>${btnText}</button>
     </article>`;
   }).join("");
-  const active = items.find((chapter) => chapter.access_status === "active");
-  if (active) document.querySelector(".chapter-summary").firstElementChild.innerHTML = `<b>${items.length} 章</b><span>·</span>当前计划 · 第 ${active.ordinal} 章已激活`;
+  const doneCount = items.filter((chapter) => chapter.access_status === "completed").length;
+  if (active) document.querySelector(".chapter-summary").firstElementChild.innerHTML = `<b>${items.length} 章</b><span>·</span>${doneCount ? `已完成 ${doneCount} 章 · ` : ""}当前计划 · 第 ${active.ordinal} 章已激活`;
 }
 
 function beatHtml([name, state, content, type], index) {
@@ -844,7 +915,140 @@ function beatHtml([name, state, content, type], index) {
   </article>`;
 }
 
-function renderWorkspace() {
+// --- Phase 5/6: real API workspace rendering ---
+
+function beatHtmlApi(beat, readOnly) {
+  const prose = beat.latest_prose;
+  const finished = beat.status === "applied" || beat.status === "completed";
+  const statusText = finished ? "✓ 已完成" : beat.status === "generated" ? "已生成" : beat.status === "available" ? "当前 Beat" : beat.status === "planned" ? "计划中" : beat.status;
+  const statusClass = finished ? "green" : beat.status === "generated" ? "purple" : beat.status === "available" ? "blue" : "";
+  const body = prose ? prose.markdown : (beat.instruction || "（暂无节拍指令。）");
+  const expanded = finished || beat.status === "generated" || beat.status === "available";
+  const versionBadge = prose ? `<span class="tag" style="margin-left:8px">v${prose.version}</span>` : "";
+  let actions = "";
+  if (readOnly) {
+    actions = `<span class="tag green" style="margin-left:8px">已应用 v${prose ? prose.version : "?"}</span>`;
+  } else if (finished) {
+    actions = `<button class="secondary-button regenerate-beat" type="button" data-scene-id="${beat.scene_id}" data-beat-id="${beat.id}">重新生成</button>${versionBadge}`;
+  } else {
+    actions = `<button class="primary-button generate-beat" type="button" data-scene-id="${beat.scene_id}">生成 Beat 正文 →</button>`;
+  }
+  return `<article class="beat-card ${beat.status === "available" || beat.status === "generated" || finished ? "current" : ""}">
+    <button class="beat-head" type="button" aria-expanded="${expanded}"><span class="tag ${statusClass}">${statusText}</span><b>${beat.name || `Beat ${beat.ordinal}`}</b><span>${expanded ? "收起 ▴" : "展开 ▾"}</span></button>
+    <div class="beat-body" ${expanded ? "" : "hidden"}>${body}</div>
+    <div class="beat-actions">${actions}</div>
+  </article>`;
+}
+
+function renderWorkspaceFromContext(context) {
+  const chapter = context.chapter;
+  const scenesData = context.scenes || [];
+  const readOnly = chapter.access_status === "completed";
+  const wsHeading = document.querySelector(".workspace-heading .title-with-actions h1");
+  if (wsHeading) wsHeading.textContent = `Chapter ${String(chapter.ordinal).padStart(2, "0")} · ${chapter.title || ""}${readOnly ? "（已完成）" : ""}`;
+  document.querySelector(".rail-head h3").textContent = chapter.title || `第 ${chapter.ordinal} 章`;
+  document.querySelector(".rail-head b").textContent = `CHAPTER ${String(chapter.ordinal).padStart(2, "0")}`;
+  const railGoal = document.querySelector(".rail-head p");
+  if (railGoal) railGoal.textContent = chapter.goal ? `目标：${chapter.goal}` : "";
+  // Disable the top-level "generate whole chapter" button in read-only mode.
+  const completeBtn = document.querySelector("#complete-chapter");
+  if (completeBtn) completeBtn.disabled = readOnly;
+
+  if (!scenesData.length) {
+    document.querySelector("#scene-items").innerHTML = "";
+    document.querySelector("#active-scene-label").textContent = "尚无场景计划";
+    document.querySelector("#editor-status").textContent = readOnly ? "已完成" : "等待生成";
+    const actionButton = readOnly ? "" : `<button class="primary-button generate-scene-plan" type="button">生成场景计划 →</button>`;
+    document.querySelector("#scene-content").innerHTML = `<div class="scene-title-row"><h2 class="scene-title">${readOnly ? "该章节已完成" : "尚未生成场景计划"}</h2>${actionButton}<button class="config-button" type="button" data-config>⚙ 生成设置</button></div><p class="scene-subtitle">${readOnly ? "本章已确认 Delta 并完成写作，仅可查看历史。" : "先为本章规划 Scene，再逐场景规划 Beat。"}</p><div class="scene-overview"><b>Chapter 目标</b><br>${chapter.goal || chapter.summary || "暂无"}</div>`;
+    bindWorkspaceEvents();
+    return;
+  }
+
+  if (!scenesData.some((scene) => scene.id === activeScene)) activeScene = scenesData[0].id;
+  document.querySelector("#scene-items").innerHTML = scenesData.map((scene) => {
+    const isCurrent = scene.id === activeScene;
+    return `<button class="scene-item ${isCurrent ? "current" : ""} ${scene.status === "completed" ? "done" : ""}" type="button" data-scene="${scene.id}">${scene.status === "completed" ? "✓ " : ""}Scene ${scene.ordinal} · ${scene.title || ""}<small>${scene.status === "available" ? "当前" : scene.status === "planned" ? "计划中" : scene.status} · ${(scene.beats || []).length} 个 Beat</small></button>`;
+  }).join("");
+
+  const scene = scenesData.find((item) => item.id === activeScene) || scenesData[0];
+  const subtitle = [scene.location, scene.time, scene.pov].filter(Boolean).join(" · ");
+  document.querySelector("#active-scene-label").textContent = `Scene ${scene.ordinal} · ${scene.title}`;
+  document.querySelector("#editor-status").textContent = scene.status === "available" ? "当前 Scene" : scene.status === "completed" ? "已完成" : "计划中";
+  const beats = scene.beats || [];
+  const beatsHtml = beats.map((b) => beatHtmlApi(b, readOnly)).join("");
+  const allBeatsDone = beats.length > 0 && beats.every((b) => b.status === "applied" || b.status === "completed");
+  const actionBar = readOnly
+    ? ""
+    : `<button class="secondary-button generate-beat-plan" type="button" data-scene-id="${scene.id}">生成节拍计划 →</button> <button class="secondary-button generate-chapter-remaining" type="button">完成本章剩余 →</button>`;
+  const deltaArea = (!readOnly && allBeatsDone)
+    ? `<div class="scene-actions delta-confirm-area" style="margin-top:16px;padding:14px;border:1px solid var(--accent,#7c5cff);border-radius:10px"><b>Chapter Delta 就绪</b><p style="margin:6px 0">本章所有 Beat 已应用。确认 Chapter Delta 后将更新 Living State 并激活下一章。</p><button class="primary-button confirm-chapter-delta" type="button">确认 Chapter Delta →</button></div>`
+    : "";
+  const sceneGenButton = readOnly ? "" : `<button class="primary-button scene-generate" type="button">生成整个 Scene 正文</button>`;
+  document.querySelector("#scene-content").innerHTML = `<div class="scene-title-row"><h2 class="scene-title">Scene ${scene.ordinal} · ${scene.title}</h2>${sceneGenButton}<button class="config-button" type="button" data-config>⚙ 生成设置</button></div><p class="scene-subtitle">${subtitle}</p><div class="scene-overview"><b>Scene 描述</b><br>${scene.character_goals || ""}${scene.conflict ? `<br><b>冲突：</b>${scene.conflict}` : ""}${scene.key_events ? `<br><b>关键事件：</b>${scene.key_events}` : ""}${scene.scene_result ? `<br><b>场景结果：</b>${scene.scene_result}` : ""}</div>${beatsHtml || `<div class="books-empty" style="grid-column:1/-1"><h3>该场景尚未规划 Beat</h3><p>点击下方「生成节拍计划」，为当前场景规划 Beat 顺序。</p></div>`}<div class="scene-actions" style="margin-top:12px">${actionBar}</div>${deltaArea}`;
+  renderWorkspaceStatus(context);
+  bindWorkspaceEvents();
+}
+
+function renderWorkspaceStatus(context) {
+  const chapter = context.chapter;
+  const snapshot = context.snapshot;
+  const scenes = context.scenes || [];
+  const doneScenes = scenes.filter((s) => s.status === "completed").length;
+  const totalBeats = scenes.reduce((n, s) => n + (s.beats || []).length, 0);
+  const doneBeats = scenes.reduce((n, s) => n + (s.beats || []).filter((b) => b.status === "applied" || b.status === "completed").length, 0);
+  const readOnly = chapter.access_status === "completed";
+
+  // Right status rail.
+  const snapEl = document.querySelector("#snapshot-status");
+  if (snapEl) snapEl.textContent = snapshot ? (snapshot.status === "valid" ? `有效 · Chapter ${String(chapter.ordinal).padStart(2, "0")} 入口` : "过期 · 需按序重算") : "未构建";
+  const sceneEl = document.querySelector("#scene-status");
+  if (sceneEl) sceneEl.textContent = scenes.length ? (doneScenes === scenes.length ? `已完成 ${doneScenes}/${scenes.length} 个场景` : `进行中 · ${doneBeats}/${totalBeats} Beat`) : "尚无场景计划";
+  const deltaEl = document.querySelector("#delta-count");
+  if (deltaEl) {
+    const proposed = (context.deltas || []).filter((d) => d.status === "proposed").length;
+    deltaEl.textContent = readOnly ? "已确认" : proposed ? `${proposed} 条 · 待确认` : "0 条 · 待确认";
+  }
+  const issueEl = document.querySelector("#issue-count");
+  if (issueEl) {
+    const open = (context.issues || []).filter((i) => i.status === "open").length;
+    issueEl.textContent = open ? `${open} 条提醒 · 不阻止写作` : "0 条提醒";
+  }
+
+  // Global state modal: rebuild from real snapshot + events.
+  const modalGrid = document.querySelector("#state-modal .state-modal-grid");
+  if (!modalGrid) return;
+  // Modal header must reflect the real entry chapter, never a static label.
+  const eyebrowEl = document.querySelector("#state-modal .eyebrow");
+  if (eyebrowEl) eyebrowEl.textContent = `LIVING STATE · CHAPTER ${String(chapter.ordinal).padStart(2, "0")} ENTRY`;
+  const state = snapshot?.state || { characters: {}, world: {}, timeline: {} };
+
+  const charEntries = Array.isArray(state.characters?.entries) ? state.characters.entries : [];
+  const worldEntries = Array.isArray(state.world?.entries) ? state.world.entries : [];
+  const timelineEntries = Array.isArray(state.timeline?.entries) ? state.timeline.entries : [];
+  const events = context.events || [];
+
+  // Format field values that may be nested objects / object arrays (e.g. timeline events).
+  const fmt = (v) => Array.isArray(v)
+    ? v.map((x) => typeof x === "object" && x !== null ? Object.entries(x).map(([k, val]) => `${k}：${val}`).join("，") : String(x)).join("；")
+    : typeof v === "object" && v !== null ? Object.entries(v).map(([k, val]) => `${k}：${val}`).join("；") : String(v == null ? "" : v);
+  const factHtml = (name, text, source) => `<div class="state-fact"><b>${name}</b><p>${text || "（暂无）"}</p>${source ? `<small>来源：${source}</small>` : ""}</div>`;
+  const charFacts = charEntries.length ? charEntries.map((e) => factHtml(e.name || "角色", Object.values(e.fields || {}).map(fmt).join("；") || "已确认设定", `Living State · ${snapshot ? snapshot.status : ""}`)).join("") : `<div class="state-fact"><b>暂无角色状态</b><p>确认 Blueprint 后自动投影。</p></div>`;
+  const worldFacts = worldEntries.length ? worldEntries.map((e) => factHtml(e.name || "世界条目", Object.values(e.fields || {}).map(fmt).join("；") || "已确认设定", "Living State · confirmed")).join("") : `<div class="state-fact"><b>暂无世界状态</b><p>确认 Blueprint 后自动投影。</p></div>`;
+  const eventsHtml = events.length ? events.map((ev, i) => `<div class="event-line"><b>E${String(i + 1).padStart(2, "0")}</b><p>${ev.title || ev.goal}${ev.planned_result ? ` · 目标：${ev.planned_result}` : ""}<br><small>${ev.actual_result ? `actual：${ev.actual_result}` : "planned · 尚未写入 Story State"}</small></p></div>`).join("") : `<div class="state-fact"><b>暂无 Chapter Events</b><p>可在工作台规划章节事件。</p></div>`;
+  const timelineFacts = timelineEntries.length ? timelineEntries.map((e) => factHtml(e.name || "时间线条目", Object.values(e.fields || {}).map(fmt).join("；") || "", "Story Arc · confirmed")).join("") : `<div class="state-fact"><b>暂无时间线状态</b><p>确认 Blueprint 后自动投影。</p></div>`;
+
+  modalGrid.innerHTML = `
+    <article><h3>角色状态</h3>${charFacts}</article>
+    <article><h3>世界状态</h3>${worldFacts}<h3 class="events-title">Chapter Events · 计划</h3>${eventsHtml}</article>
+    <article><h3>时间线与剧情线</h3>${timelineFacts}</article>`;
+  const footTag = document.querySelector("#state-modal .modal-foot .tag");
+  if (footTag) {
+    const proposed = (context.deltas || []).filter((d) => d.status === "proposed").length;
+    footTag.textContent = readOnly ? `本章 Delta 已确认 · Chapter ${chapter.ordinal} 完成` : proposed ? `${proposed} 条 Delta 候选，需章节完成后确认` : "暂无 Delta 候选";
+  }
+}
+
+function renderWorkspaceFallback() {
   document.querySelector("#scene-items").innerHTML = scenes.map((scene) => `<button class="scene-item ${scene.status} ${scene.id === activeScene ? "current" : ""}" type="button" data-scene="${scene.id}" ${scene.status === "locked" ? "disabled" : ""}>${scene.status === "done" ? "✓ " : ""}Scene ${scene.id} · ${scene.name}<small>${scene.hint}</small></button>`).join("");
   const data = sceneContent[activeScene];
   document.querySelector("#active-scene-label").textContent = data.title;
@@ -853,9 +1057,63 @@ function renderWorkspace() {
   bindWorkspaceEvents();
 }
 
+async function loadWorkspaceContext() {
+  const book = currentBook();
+  if (!apiAvailable || !book) {
+    currentWorkspaceContext = null;
+    renderWorkspaceFallback();
+    return;
+  }
+  // Show a loading placeholder instead of demo fallback while the context loads.
+  document.querySelector(".rail-head h3").textContent = "加载章节上下文…";
+  document.querySelector("#scene-content").innerHTML = `<div class="books-empty" style="grid-column:1/-1"><h3>正在装配 Chapter Context…</h3><p>Snapshot 与 Scene / Beat 计划正在加载。</p></div>`;
+  document.querySelector("#scene-items").innerHTML = "";
+  try {
+    let chapterId = currentActiveChapterId;
+    if (!chapterId) {
+      const chapters = await apiRequest(`/stories/${book.id}/chapters`);
+      const active = chapters.find((chapter) => chapter.access_status === "active");
+      chapterId = active ? active.id : null;
+      currentActiveChapterId = chapterId;
+    }
+    if (!chapterId) {
+      document.querySelector(".rail-head h3").textContent = "尚无激活章节";
+      document.querySelector("#scene-content").innerHTML = `<div class="books-empty" style="grid-column:1/-1"><h3>尚未生成章节计划</h3><p>请先回到「章节规划」页生成章节雏形并激活第 1 章。</p></div>`;
+      document.querySelector("#scene-items").innerHTML = "";
+      return;
+    }
+    const context = await apiRequest(`/stories/${book.id}/chapters/${chapterId}/context`, { timeoutMs: 60000 });
+    let deltas = [];
+    let issues = [];
+    try {
+      const [d, i] = await Promise.all([
+        apiRequest(`/stories/${book.id}/chapters/${chapterId}/deltas`, { timeoutMs: 60000 }),
+        apiRequest(`/stories/${book.id}/chapters/${chapterId}/issues`, { timeoutMs: 60000 }),
+      ]);
+      deltas = d || [];
+      issues = i || [];
+    } catch (e) { /* status panel degrades gracefully */ }
+    context.deltas = deltas;
+    context.issues = issues;
+    currentWorkspaceContext = context;
+    renderWorkspaceFromContext(context);
+  } catch (error) {
+    currentWorkspaceContext = null;
+    renderWorkspaceFallback();
+  }
+}
+
+function renderWorkspace() {
+  if (currentWorkspaceContext) {
+    renderWorkspaceFromContext(currentWorkspaceContext);
+  } else {
+    renderWorkspaceFallback();
+  }
+}
+
 function bindWorkspaceEvents() {
   document.querySelectorAll(".scene-item[data-scene]").forEach((button) => button.addEventListener("click", () => {
-    activeScene = Number(button.dataset.scene);
+    activeScene = button.dataset.scene;
     renderWorkspace();
   }));
   document.querySelectorAll(".beat-head").forEach((button) => button.addEventListener("click", () => {
@@ -865,18 +1123,104 @@ function bindWorkspaceEvents() {
     button.setAttribute("aria-expanded", String(hidden));
     button.lastElementChild.textContent = hidden ? "收起 ▴" : "展开 ▾";
   }));
-  document.querySelector(".generate-beat")?.addEventListener("click", () => simulateGeneration("正在基于 Chapter 01 Snapshot 生成 Beat 正文…", () => {
-    generatedBeat = true;
-    document.querySelector("#delta-count").textContent = "3 条 · 待确认";
-    renderWorkspace();
-    toast("Beat 候选已生成。原文未被替换，应用后会创建新版本与候选 Delta。");
-  }));
-  document.querySelectorAll(".scene-generate").forEach((button) => button.addEventListener("click", () => {
-    simulateGeneration(`正在按 Beat 顺序生成「${sceneContent[activeScene].title}」…`, () => {
-      generatedBeat = true;
+  // Phase 6: generate prose for the current scene (real API)
+  document.querySelectorAll(".scene-generate").forEach((button) => button.addEventListener("click", async () => {
+    const book = currentBook();
+    const sceneId = currentWorkspaceContext && currentWorkspaceContext.scenes.find((s) => s.id === activeScene) ? activeScene : (currentWorkspaceContext && currentWorkspaceContext.scenes[0] ? currentWorkspaceContext.scenes[0].id : null);
+    if (!apiAvailable || !book || !currentActiveChapterId || !sceneId) { toast("需要激活章节与场景后才能生成正文。"); return; }
+    showThinking("正在按 Beat 顺序生成当前 Scene 正文…", "AI 正在基于 Snapshot 与节拍指令写作");
+    try {
+      await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/scenes/${sceneId}/generations`, { method: "POST", body: JSON.stringify({ action: "generate_scene" }), timeoutMs: 600000 });
+      currentWorkspaceContext = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/context`, { timeoutMs: 60000 });
       renderWorkspace();
-      toast("当前 Scene 的候选内容已生成。已完成 Beat 不会被覆盖。");
-    });
+      toast("当前 Scene 正文已生成并自动应用。");
+    } catch (error) { toast("正文生成失败，原文未被修改。"); }
+    finally { hideThinking(); }
+  }));
+  // Phase 6: generate prose for a single beat (auto-applied)
+  document.querySelectorAll(".generate-beat").forEach((button) => button.addEventListener("click", async () => {
+    const book = currentBook();
+    const sceneId = button.dataset.sceneId;
+    if (!apiAvailable || !book || !currentActiveChapterId || !sceneId) { toast("需要激活章节与场景。"); return; }
+    showThinking("正在生成 Beat 正文…", "AI 正在基于节拍指令写作");
+    try {
+      await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/scenes/${sceneId}/generations`, { method: "POST", body: JSON.stringify({ action: "generate_scene" }), timeoutMs: 600000 });
+      currentWorkspaceContext = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/context`, { timeoutMs: 60000 });
+      renderWorkspace();
+      toast("Beat 正文已生成并自动应用。");
+    } catch (error) { toast("正文生成失败。"); }
+    finally { hideThinking(); }
+  }));
+  // Phase 6: regenerate an applied beat (creates a new applied version)
+  document.querySelectorAll(".regenerate-beat").forEach((button) => button.addEventListener("click", async () => {
+    const book = currentBook();
+    const sceneId = button.dataset.sceneId;
+    const beatId = button.dataset.beatId;
+    if (!apiAvailable || !book || !currentActiveChapterId) { toast("需要激活章节。"); return; }
+    showThinking("正在重新生成 Beat 正文…", "将创建新版本并自动应用，历史保留");
+    try {
+      await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/scenes/${sceneId}/generations`, { method: "POST", body: JSON.stringify({ action: "regenerate_beat", beat_id: beatId }) });
+      currentWorkspaceContext = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/context`);
+      renderWorkspace();
+      toast("已生成新版本并自动应用，历史正文保留。");
+    } catch (error) { toast("重新生成失败。"); }
+    finally { hideThinking(); }
+  }));
+  // Phase 6: complete the rest of the chapter
+  document.querySelectorAll(".generate-chapter-remaining").forEach((button) => button.addEventListener("click", async () => {
+    const book = currentBook();
+    if (!apiAvailable || !book || !currentActiveChapterId) { toast("需要激活章节。"); return; }
+    showThinking("正在完成本章剩余正文…", "按 Scene / Beat 顺序逐段生成并自动应用");
+    try {
+      const result = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/generations`, { method: "POST", body: JSON.stringify({ action: "generate_chapter_remaining" }), timeoutMs: 600000 });
+      currentWorkspaceContext = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/context`, { timeoutMs: 60000 });
+      renderWorkspace();
+      toast(`已生成并应用 ${result.prose_versions.length} 段正文。`);
+    } catch (error) { toast("本章剩余正文生成失败。"); }
+    finally { hideThinking(); }
+  }));
+  // Phase 6: confirm chapter delta and activate next chapter
+  document.querySelectorAll(".confirm-chapter-delta").forEach((button) => button.addEventListener("click", async () => {
+    const book = currentBook();
+    if (!apiAvailable || !book || !currentActiveChapterId) { toast("需要激活章节。"); return; }
+    showThinking("正在确认 Chapter Delta…", "更新 Living State 并激活下一章");
+    try {
+      const result = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/deltas/confirm`, { method: "POST", body: JSON.stringify({}) });
+      if (result.next_chapter) {
+        currentActiveChapterId = result.next_chapter.id;
+      }
+      currentWorkspaceContext = null;
+      await loadWorkspaceContext();
+      toast(result.next_chapter ? `本章已完成，第 ${result.next_chapter.ordinal} 章已激活。` : "全书已完成。");
+    } catch (error) { toast("Delta 确认失败。"); }
+    finally { hideThinking(); }
+  }));
+  // Phase 5: generate scene plan from API
+  document.querySelector(".generate-scene-plan")?.addEventListener("click", async () => {
+    const book = currentBook();
+    if (!apiAvailable || !book || !currentActiveChapterId) { toast("需要激活章节后才能生成场景计划。"); return; }
+    showThinking("正在根据章节目标生成场景计划…", "AI 正在规划 Scene 顺序与节拍");
+    try {
+      const result = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/generations`, { method: "POST", body: JSON.stringify({ action: "generate_scene_plan" }) });
+      currentWorkspaceContext = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/context`);
+      renderWorkspace();
+      toast(`已生成 ${result.scenes.length} 个场景计划。`);
+    } catch (error) { toast("场景计划生成失败，章节计划未变。"); }
+    finally { hideThinking(); }
+  });
+  // Phase 5: generate beat plan for a scene
+  document.querySelectorAll(".generate-beat-plan").forEach((button) => button.addEventListener("click", async () => {
+    const book = currentBook();
+    const sceneId = button.dataset.sceneId;
+    if (!apiAvailable || !book || !currentActiveChapterId || !sceneId) { toast("需要激活章节后才能生成节拍计划。"); return; }
+    showThinking("正在根据场景目标生成节拍计划…", "AI 正在规划 Beat 顺序");
+    try {
+      await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/scenes/${sceneId}/generations`, { method: "POST", body: JSON.stringify({ action: "generate_beat_plan" }) });
+      currentWorkspaceContext = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/context`);
+      renderWorkspace();
+      toast("节拍计划已生成。");
+    } catch (error) { toast("节拍计划生成失败。"); }
+    finally { hideThinking(); }
   }));
 }
 
@@ -975,7 +1319,10 @@ async function generateConcept(book) {
 }
 
 function bindEvents() {
-  document.querySelectorAll("[data-nav]").forEach((button) => button.addEventListener("click", () => showScreen(button.dataset.nav)));
+  document.querySelectorAll("[data-nav]").forEach((button) => button.addEventListener("click", () => {
+    if (button.dataset.nav === "workspace") currentActiveChapterId = null; // stepbar always targets the active chapter
+    showScreen(button.dataset.nav);
+  }));
   document.querySelectorAll("[data-toast]").forEach((button) => button.addEventListener("click", () => toast(button.dataset.toast)));
   document.querySelector("#idea-input").addEventListener("input", (event) => {
     document.querySelector("#idea-count").textContent = `${event.target.value.length} / 2,000`;
@@ -1073,7 +1420,10 @@ function bindEvents() {
     simulateGeneration("正在生成 Chapter Plan 雏形…", () => { showScreen("chapters"); toast("章节雏形已生成。仅 Chapter 01 处于 active 状态。"); });
   });
   document.querySelector("#to-chapters").addEventListener("click", () => showScreen("chapters"));
-  document.querySelector("#open-workspace").addEventListener("click", () => showScreen("workspace"));
+  document.querySelector("#open-workspace").addEventListener("click", () => {
+    currentActiveChapterId = null; // always open the active chapter from the chapter-plan page
+    showScreen("workspace");
+  });
   document.querySelector("#generate-chapter-plan").addEventListener("click", async () => {
     const book = currentBook();
     if (!apiAvailable || !book) { toast("当前没有可生成的作品。"); return; }
@@ -1088,7 +1438,16 @@ function bindEvents() {
     finally { hideThinking(); }
   });
   document.querySelectorAll(".blueprint-tab").forEach((tab) => tab.addEventListener("click", () => renderBlueprint(tab.dataset.blueprint)));
-  document.querySelector("#chapter-grid").addEventListener("click", (event) => { const target = event.target.closest("[data-nav]"); if (target) showScreen(target.dataset.nav); });
+  document.querySelector("#chapter-grid").addEventListener("click", (event) => {
+    const target = event.target.closest("[data-nav], [data-chapter-id]");
+    if (!target) return;
+    if (target.dataset.nav) { showScreen(target.dataset.nav); return; }
+    if (target.dataset.chapterId) {
+      // Open a completed chapter in the workspace (read-only review).
+      currentActiveChapterId = target.dataset.chapterId;
+      showScreen("workspace");
+    }
+  });
   const modal = document.querySelector("#state-modal");
   const openModal = () => { modal.hidden = false; modal.style.display = "grid"; document.body.style.overflow = "hidden"; };
   const closeModal = () => { modal.hidden = true; modal.style.display = "none"; document.body.style.overflow = ""; };
@@ -1120,11 +1479,39 @@ function bindEvents() {
   document.querySelectorAll("[data-close-config]").forEach((button) => button.addEventListener("click", () => hideModal("#config-modal")));
   document.querySelector("#show-write-tips").addEventListener("click", () => showModal("#tips-modal"));
   document.querySelectorAll("[data-close-tips]").forEach((button) => button.addEventListener("click", () => hideModal("#tips-modal")));
-  document.querySelector("#complete-chapter").addEventListener("click", () => simulateGeneration("正在从当前 Beat 顺序生成本章剩余内容…", () => {
-    generatedBeat = true;
-    renderWorkspace();
-    toast("模拟执行已暂停在作者确认点：Chapter Delta 必须确认后，才能更新 Living State 并激活下一章。");
-  }));
+  document.querySelector("#complete-chapter").addEventListener("click", async () => {
+    const book = currentBook();
+    if (!apiAvailable || !book || !currentActiveChapterId) { toast("需要激活章节后才能生成。"); return; }
+    showThinking("正在一键生成整个章节…", "场景计划 → 节拍计划 → 正文自动应用");
+    let totalProduced = 0;
+    try {
+      // 1. Ensure a scene plan exists.
+      let context = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/context`, { timeoutMs: 60000 });
+      if (!context.scenes.length) {
+        await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/generations`, { method: "POST", body: JSON.stringify({ action: "generate_scene_plan" }), timeoutMs: 300000 });
+      }
+      // 2. Scene by scene: ensure beat plan, then generate prose (auto-applied). Each scene is its own request so no single call can time out.
+      context = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/context`, { timeoutMs: 60000 });
+      for (const scene of context.scenes) {
+        if (!scene.beats || !scene.beats.length) {
+          await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/scenes/${scene.id}/generations`, { method: "POST", body: JSON.stringify({ action: "generate_beat_plan" }), timeoutMs: 300000 });
+        }
+        const result = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/scenes/${scene.id}/generations`, { method: "POST", body: JSON.stringify({ action: "generate_scene" }), timeoutMs: 600000 });
+        totalProduced += (result.prose_versions || []).length;
+      }
+      currentWorkspaceContext = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/context`, { timeoutMs: 60000 });
+      renderWorkspace();
+      toast(totalProduced ? `一键生成完成：已生成并应用 ${totalProduced} 段正文。请确认 Chapter Delta 后进入下一章。` : "本章正文已全部生成并应用，请确认 Chapter Delta 后进入下一章。");
+    } catch (error) {
+      // A step may have timed out on the client while the server finished; refresh to show the real state.
+      try {
+        currentWorkspaceContext = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/context`, { timeoutMs: 60000 });
+        renderWorkspace();
+      } catch (e) { /* keep previous render */ }
+      toast("一键生成遇到超时或失败，已刷新显示实际已生成内容，可再次点击继续。");
+    }
+    finally { hideThinking(); }
+  });
   document.querySelector("#show-context").addEventListener("click", openModal);
   document.querySelector("#add-model").addEventListener("click", () => toast("配置表单将以服务端环境变量引用 API Key；原型不接收或展示真实密钥。"));
   document.querySelector("#save-models").addEventListener("click", () => { toast("模型路由策略已保存（模拟）。后续生成可在页面级下拉菜单临时覆盖。" ); });

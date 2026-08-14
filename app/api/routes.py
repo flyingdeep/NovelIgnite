@@ -1,7 +1,7 @@
 """API v1 route aggregation."""
 import os
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from app.infrastructure.database import get_db
@@ -12,9 +12,48 @@ from app.works.service import create_story, get_ai_config, get_story_or_404, lis
 from app.works.concept_schemas import ConceptConfirm, ConceptGenerationRequest, ConceptUpdate
 from app.works.concept_service import confirm_concept, concept_response, generate_concept, latest_concept, update_concept
 from app.works.blueprint_schemas import BlueprintConfirm, BlueprintGenerationRequest, BlueprintUpdate, artifact_response
-from app.works.blueprint_service import confirm_blueprint, generate_blueprint, latest_blueprint, list_blueprint, update_blueprint
+from app.works.blueprint_service import confirm_blueprint, generate_blueprint, latest_blueprint, list_blueprint, list_living_state_history, update_blueprint
 from app.planning.schemas import ChapterPlanGenerationRequest, ChapterPlanUpdate
 from app.planning.service import chapter_response, generate_chapter_plan, get_chapter, list_chapters, update_chapter_plan
+from app.planning.workspace_schemas import (
+    BeatUpdate,
+    ChapterDeltaConfirm,
+    ChapterEventUpdate,
+    ProseVersionCreate,
+    ScenePlanGenerationRequest,
+    SceneUpdate,
+)
+from app.planning.workspace_service import (
+    build_state_snapshot,
+    create_beat,
+    create_event,
+    create_scene,
+    delete_beat,
+    delete_event,
+    delete_scene,
+    event_response,
+    generate_beat_plan,
+    generate_scene_plan,
+    get_chapter_context,
+    scene_response,
+    update_beat,
+    update_event,
+    update_scene,
+)
+from app.planning.writing_service import (
+    apply_beat_prose,
+    build_chapter_delta,
+    confirm_chapter_delta,
+    delta_response,
+    generate_chapter_remaining,
+    generate_scene,
+    issue_response,
+    list_prose,
+    mark_subsequent_stale,
+    prose_response,
+    regenerate_beat,
+    run_consistency_check,
+)
 
 router = APIRouter()
 
@@ -102,6 +141,12 @@ def get_blueprint(story_id: str, db: Session = Depends(get_db)):
     return {kind: artifact_response(artifact) if artifact else None for kind, artifact in artifacts.items()}
 
 
+@router.get("/stories/{story_id}/living-state/history")
+def get_living_state_history(story_id: str, db: Session = Depends(get_db)):
+    """All Living State versions (newest first) for the version-history modal."""
+    return [artifact_response(artifact) for artifact in list_living_state_history(db, story_id)]
+
+
 @router.get("/stories/{story_id}/blueprint/{kind}")
 def get_blueprint_kind(story_id: str, kind: str, db: Session = Depends(get_db)):
     get_story_or_404(db, story_id)
@@ -145,6 +190,134 @@ def get_story_chapter(story_id: str, chapter_id: str, db: Session = Depends(get_
 @router.put("/stories/{story_id}/chapters/{chapter_id}/plan")
 def put_story_chapter_plan(story_id: str, chapter_id: str, payload: ChapterPlanUpdate, db: Session = Depends(get_db)):
     return chapter_response(update_chapter_plan(db, story_id, chapter_id, payload))
+
+
+# --- Phase 5: Chapter Workspace (context / events / scenes / beats) ---
+
+@router.get("/stories/{story_id}/chapters/{chapter_id}/context")
+def get_story_chapter_context(story_id: str, chapter_id: str, db: Session = Depends(get_db)):
+    return get_chapter_context(db, story_id, chapter_id)
+
+
+@router.post("/stories/{story_id}/chapters/{chapter_id}/generations")
+def post_chapter_workspace_generation(story_id: str, chapter_id: str, payload: ScenePlanGenerationRequest, db: Session = Depends(get_db)):
+    if payload.action == "generate_scene_plan":
+        scenes = generate_scene_plan(db, story_id, chapter_id, payload)
+        return {"status": "succeeded", "scenes": [scene_response(s, []) for s in scenes]}
+    if payload.action == "generate_chapter_remaining":
+        produced = generate_chapter_remaining(db, story_id, chapter_id, payload)
+        return {"status": "succeeded", "prose_versions": [prose_response(p) for p in produced]}
+    # generate_beat_plan requires a scene id — handled by scene-scoped endpoint below
+    raise HTTPException(status_code=422, detail="generate_beat_plan requires scene_id; use /scenes/{scene_id}/generations")
+
+
+@router.post("/stories/{story_id}/chapters/{chapter_id}/scenes/{scene_id}/generations")
+def post_scene_beat_generation(story_id: str, chapter_id: str, scene_id: str, payload: ScenePlanGenerationRequest, db: Session = Depends(get_db)):
+    if payload.action == "generate_beat_plan":
+        beats = generate_beat_plan(db, story_id, chapter_id, scene_id, payload)
+        return {"status": "succeeded", "beats": [{"id": b.id, "scene_id": b.scene_id, "ordinal": b.ordinal, "name": b.name, "instruction": b.instruction, "status": b.status, "version": b.version} for b in beats]}
+    if payload.action == "generate_scene":
+        produced = generate_scene(db, story_id, chapter_id, scene_id, payload)
+        return {"status": "succeeded", "prose_versions": [prose_response(p) for p in produced]}
+    if payload.action == "regenerate_beat":
+        if not payload.beat_id:
+            raise HTTPException(status_code=422, detail="regenerate_beat requires beat_id")
+        pv = regenerate_beat(db, story_id, chapter_id, scene_id, payload.beat_id, payload)
+        return {"status": "succeeded", "prose_version": prose_response(pv)}
+    raise HTTPException(status_code=422, detail="Unsupported action for scene generation")
+
+
+# --- Phase 6: prose versions, deltas, consistency ---
+
+@router.get("/stories/{story_id}/chapters/{chapter_id}/scenes/{scene_id}/beats/{beat_id}/prose")
+def get_beat_prose(story_id: str, chapter_id: str, scene_id: str, beat_id: str, db: Session = Depends(get_db)):
+    return [prose_response(pv) for pv in list_prose(db, beat_id)]
+
+
+@router.post("/stories/{story_id}/chapters/{chapter_id}/scenes/{scene_id}/beats/{beat_id}/prose-versions")
+def post_beat_prose(story_id: str, chapter_id: str, scene_id: str, beat_id: str, payload: ProseVersionCreate, db: Session = Depends(get_db)):
+    return prose_response(apply_beat_prose(db, story_id, chapter_id, scene_id, beat_id, payload))
+
+
+@router.get("/stories/{story_id}/chapters/{chapter_id}/deltas")
+def get_chapter_deltas(story_id: str, chapter_id: str, db: Session = Depends(get_db)):
+    from app.planning.models import StateDelta
+    from sqlalchemy import select
+    deltas = list(db.scalars(select(StateDelta).where(StateDelta.chapter_id == chapter_id).order_by(StateDelta.created_at)))
+    return [delta_response(d) for d in deltas]
+
+
+@router.post("/stories/{story_id}/chapters/{chapter_id}/deltas/confirm")
+def post_chapter_delta_confirm(story_id: str, chapter_id: str, payload: ChapterDeltaConfirm, db: Session = Depends(get_db)):
+    return confirm_chapter_delta(db, story_id, chapter_id, payload.expected_delta_id)
+
+
+@router.get("/stories/{story_id}/chapters/{chapter_id}/issues")
+def get_chapter_issues(story_id: str, chapter_id: str, db: Session = Depends(get_db)):
+    from app.planning.models import ConsistencyIssue
+    from sqlalchemy import select
+    issues = list(db.scalars(select(ConsistencyIssue).where(ConsistencyIssue.chapter_id == chapter_id).order_by(ConsistencyIssue.created_at)))
+    return [issue_response(i) for i in issues]
+
+
+# TODO: Phase 2 — idea / concept
+# TODO: Phase 3 — blueprint / entities
+# TODO: Phase 4 — chapter plan
+# TODO: Phase 5 — workspace: context, scenes, beats
+# TODO: Phase 6 — prose generation, delta, consistency
+
+
+@router.post("/stories/{story_id}/chapters/{chapter_id}/events")
+def post_chapter_event(story_id: str, chapter_id: str, db: Session = Depends(get_db)):
+    return event_response(create_event(db, story_id, chapter_id))
+
+
+@router.put("/stories/{story_id}/chapters/{chapter_id}/events/{event_id}")
+def put_chapter_event(story_id: str, chapter_id: str, event_id: str, payload: ChapterEventUpdate, db: Session = Depends(get_db)):
+    return event_response(update_event(db, story_id, chapter_id, event_id, payload))
+
+
+@router.delete("/stories/{story_id}/chapters/{chapter_id}/events/{event_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_chapter_event(story_id: str, chapter_id: str, event_id: str, response: Response, db: Session = Depends(get_db)):
+    delete_event(db, story_id, chapter_id, event_id)
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return None
+
+
+@router.post("/stories/{story_id}/chapters/{chapter_id}/scenes")
+def post_chapter_scene(story_id: str, chapter_id: str, db: Session = Depends(get_db)):
+    return scene_response(create_scene(db, story_id, chapter_id))
+
+
+@router.put("/stories/{story_id}/chapters/{chapter_id}/scenes/{scene_id}")
+def put_chapter_scene(story_id: str, chapter_id: str, scene_id: str, payload: SceneUpdate, db: Session = Depends(get_db)):
+    return scene_response(update_scene(db, story_id, chapter_id, scene_id, payload))
+
+
+@router.delete("/stories/{story_id}/chapters/{chapter_id}/scenes/{scene_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_chapter_scene(story_id: str, chapter_id: str, scene_id: str, response: Response, db: Session = Depends(get_db)):
+    delete_scene(db, story_id, chapter_id, scene_id)
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return None
+
+
+@router.post("/stories/{story_id}/chapters/{chapter_id}/scenes/{scene_id}/beats")
+def post_scene_beat(story_id: str, chapter_id: str, scene_id: str, db: Session = Depends(get_db)):
+    beat = create_beat(db, story_id, chapter_id, scene_id)
+    return {"id": beat.id, "scene_id": beat.scene_id, "ordinal": beat.ordinal, "name": beat.name, "instruction": beat.instruction, "status": beat.status, "version": beat.version}
+
+
+@router.put("/stories/{story_id}/chapters/{chapter_id}/scenes/{scene_id}/beats/{beat_id}")
+def put_scene_beat(story_id: str, chapter_id: str, scene_id: str, beat_id: str, payload: BeatUpdate, db: Session = Depends(get_db)):
+    beat = update_beat(db, story_id, chapter_id, scene_id, beat_id, payload)
+    return {"id": beat.id, "scene_id": beat.scene_id, "ordinal": beat.ordinal, "name": beat.name, "instruction": beat.instruction, "status": beat.status, "version": beat.version}
+
+
+@router.delete("/stories/{story_id}/chapters/{chapter_id}/scenes/{scene_id}/beats/{beat_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_scene_beat(story_id: str, chapter_id: str, scene_id: str, beat_id: str, response: Response, db: Session = Depends(get_db)):
+    delete_beat(db, story_id, chapter_id, scene_id, beat_id)
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return None
 
 
 # TODO: Phase 2 — idea / concept

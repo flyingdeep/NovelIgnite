@@ -3,7 +3,7 @@
 Novel Ignite 是“作者确认优先”的 AI 小说创作 MVP。当前真实后端与原型工作台支持：
 
 ```text
-作品库 → Idea → Story Concept → Story Blueprint → Chapter Plan
+作品库 → Idea → Story Concept → Story Blueprint → Chapter Plan → Chapter Workspace → Next Chapter
 ```
 
 AI 输出始终是候选内容，只有作者显式确认或应用后才会成为权威数据。
@@ -14,10 +14,10 @@ AI 输出始终是候选内容，只有作者显式确认或应用后才会成�
 2. Idea：保存原始创意；Concept 生成后自动锁定，只读浏览。
 3. Story Concept：真实 OpenAI Chat Completions 兼容模型生成候选，支持编辑、Lock、确认与版本控制。
 4. Story Blueprint：生成 Characters、World、Initial Timeline、Story Arc 四类 Baseline，支持编辑、Lock、确认与版本履历。
-5. Living State：四类 Blueprint Baseline 确认后自动创建初始投影。
+5. Living State：Blueprint 确认后自动创建初始投影；每确认一章 Chapter Delta 生成一个新版本（v1→v2→…），并投影三域状态与章节事件推进；支持按版本查看更新履历。
 6. Chapter Plan：根据已确认 Blueprint 生成章节卡片；第 1 章为 `fixed + active`，后续章节为 `outline + locked`。
-
-Chapter Workspace、Chapter Context、Scene / Beat 规划、正文生成、State Delta 和 Next Chapter 属于后续 Phase。
+7. Chapter Workspace：Chapter Context（Snapshot + Events + Scenes + Beats）、场景/节拍规划、正文生成与应用（append-only 版本，自动接受）、Chapter Delta 合并与作者确认、下一章激活、后续章节过期标记。
+8. 一致性检查：生成正文后自动跑确定性一致性规则（过短/占位标记），问题以提醒展示，不阻止写作。
 
 ## 启动
 
@@ -30,7 +30,7 @@ py -3.13 -m alembic upgrade head
 py -3.13 -m uvicorn app.main:app --reload
 ```
 
-> **从旧版本升级：** 如果你此前使用过旧实现（`app_v1_archived`），本地 `novel_ignite.db` 可能是旧结构库（`stories` 表缺少 `stage`/`idea_text` 列），直接启动会在 `/api/v1/works` 返回 500。此时请先备份并重建数据库：
+> **从旧版本升级：** 如果你此前使用过旧 v1 结构库（`stories` 表缺少 `stage`/`idea_text` 列），直接启动会在 `/api/v1/works` 返回 500。此时请先备份并重建数据库：
 >
 > ```powershell
 > Copy-Item novel_ignite.db novel_ignite_v1_archived.db   # 备份旧数据
@@ -38,11 +38,11 @@ py -3.13 -m uvicorn app.main:app --reload
 > py -3.13 -m alembic upgrade head                        # 从零创建新结构库
 > ```
 >
-> 旧库已归档为 `novel_ignite_v1_archived.db`（已被 `.gitignore` 排除，不会提交）。
+> 旧库备份 `novel_ignite_v1_archived.db` 已被 `.gitignore` 排除，不会提交。
 
 访问：
 
-- `http://127.0.0.1:8000/prototype/`：当前原型与真实 Phase 1–4 API。
+- `http://127.0.0.1:8000/prototype/`：当前原型与真实 Phase 1–6 API。
 - `http://127.0.0.1:8000/docs`：Swagger API 文档。
 - `http://127.0.0.1:8000/health`：健康检查。
 
@@ -72,6 +72,8 @@ py -3.13 -m uvicorn app.main:app --reload
 4. 确认四类 Blueprint，观察 Story 进入 `blueprint_confirmed` 并生成初始 Living State。
 5. 进入 Chapter Plan，点击「生成章节雏形」。
 6. 确认第 1 章为 active，其余章节为 locked；锁定章节不能进入或修改。
+7. 进入 Chapter Workspace：生成场景计划 → 逐场景生成节拍计划 → 生成正文（自动应用，可再次生成新版本）→ 全部 Beat 应用后确认 Chapter Delta，Living State 升为新版本并激活下一章。
+8. 在蓝图的「Living State」页查看各版本更新履历；在已完成章节的工作台可只读查看历史。
 
 所有写操作使用 `expected_version` 做乐观锁；状态、版本或 Lock 冲突会返回 `409`。
 
@@ -97,10 +99,19 @@ py -3.13 -m uvicorn app.main:app --reload
 - `POST /api/v1/stories/{id}/blueprint/generations`
 - `PUT /api/v1/stories/{id}/blueprint/{kind}`
 - `POST /api/v1/stories/{id}/blueprint/confirm`
+- `GET /api/v1/stories/{id}/living-state/history`
 - `GET /api/v1/stories/{id}/chapters`
 - `POST /api/v1/stories/{id}/chapter-plan`
 - `GET /api/v1/stories/{id}/chapters/{chapter_id}`
 - `PUT /api/v1/stories/{id}/chapters/{chapter_id}/plan`
+- `GET /api/v1/stories/{id}/chapters/{chapter_id}/context`
+- `POST /api/v1/stories/{id}/chapters/{chapter_id}/generations`（scene-plan / beat-plan / generate_scene / generate_chapter_remaining / regenerate_beat）
+- `POST /api/v1/stories/{id}/chapters/{chapter_id}/scenes/{scene_id}/generations`
+- `POST /api/v1/stories/{id}/chapters/{chapter_id}/scenes/{scene_id}/beats/{beat_id}/prose-versions`
+- `GET /api/v1/stories/{id}/chapters/{chapter_id}/scenes/{scene_id}/beats/{beat_id}/prose`
+- `GET /api/v1/stories/{id}/chapters/{chapter_id}/deltas`
+- `POST /api/v1/stories/{id}/chapters/{chapter_id}/deltas/confirm`
+- `GET /api/v1/stories/{id}/chapters/{chapter_id}/issues`
 
 ## 测试与迁移
 
@@ -109,18 +120,17 @@ py -3.13 -m alembic upgrade head
 py -3.13 -m pytest -q
 ```
 
-当前回归结果：**22 passed**。覆盖作品库、Idea 锁定、AI 配置、三模型适配（含思考/推理参数与官方 max token）、Concept 候选/确认与卖点规范化、Blueprint 四分类全条目渲染、Living State 初始投影、Chapter Plan 逐章激活与锁定章节保护、标题生成、可观测性指标。
+当前回归结果：**42 passed**。覆盖作品库、Idea 锁定、AI 配置、三模型适配（含思考/推理参数与官方 max token）、Concept 候选/确认与卖点规范化、Blueprint 四分类全条目渲染、Living State 初始投影、Chapter Plan 逐章激活与锁定章节保护、标题生成、可观测性指标（Phase 1–4）；Chapter Workspace 快照/上下文、Scene / Beat 规划与乐观锁、正文自动应用与版本追溯、Chapter Delta 确认与 Living State 版本递增、一致性检查（Phase 5–6）；以及 Playwright 端到端冒烟（E2E）。
 
 ## 目录
 
 - `app/api/`：FastAPI 路由与 DTO。
-- `app/works/`：作品库、Concept、Blueprint 服务与模型。
-- `app/planning/`：Chapter Plan 模型、生成和访问控制。
-- `app/infrastructure/`：配置、SQLite（WAL 并发）、SQLAlchemy、模型适配器、可观测性（指标/日志）。
+- `app/works/`：作品库、Concept、Blueprint、Living State 服务与模型。
+- `app/planning/`：Chapter Plan、Chapter Workspace（Snapshot/Events/Scenes/Beats）、写作服务（Prose/Delta/Consistency）。
+- `app/infrastructure/`：配置、SQLite、SQLAlchemy、模型适配器、可观测性（指标/日志）。
 - `app/lore/`：全局实体领域预留。
 - `app/writing/`：正文生成领域预留。
 - `app/consistency/`：Snapshot、Delta、一致性领域预留。
 - `prototype/`：UI 交互事实来源与当前原型前端。
 - `migrations/`：Alembic 迁移。
-- `tests/`：新工程 Phase 1–4 测试。
-- `app_v1_archived/`、`tests_v1_archived/`、`migrations/versions_v1_archived/`：旧实现归档。
+- `tests/`：Phase 1–6 单元/集成测试与 E2E 冒烟测试。

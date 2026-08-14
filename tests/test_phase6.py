@@ -1,0 +1,233 @@
+"""Phase 6 tests: prose versions, sequential generation, deltas, consistency."""
+import json
+
+from app.infrastructure.fake_adapter import FakeModelAdapter
+
+SCENE_PLAN_JSON = json.dumps([
+    {"title": "场景甲", "location": "旧港", "time": "深夜", "pov": "林墨", "character_goals": "接触样本", "conflict": "匿名委托", "key_events": "发现编号", "scene_result": "接下委托", "chapter_goal_relation": "建立目标"},
+    {"title": "场景乙", "location": "档案室", "time": "凌晨", "pov": "林墨", "character_goals": "寻找档案", "conflict": "页码替换", "key_events": "发现篡改", "scene_result": "确认人为", "chapter_goal_relation": "推进调查"},
+], ensure_ascii=False)
+
+PROSE_TEXT = "夜色沉了下来。林墨推开鉴定所的后门，一张没有署名的纸条静静躺在门槛上。"
+
+
+def _setup_chapter_with_scenes(client, monkeypatch, title="Phase6 流程"):
+    """Walk a story to chapter-planning and generate a scene plan with beats (2 chapters)."""
+    monkeypatch.setattr("app.works.concept_service.build_adapters", lambda: {})
+    monkeypatch.setattr("app.works.blueprint_service.build_adapters", lambda: {})
+    monkeypatch.setattr("app.planning.service.build_adapters", lambda: {"deepseek": FakeModelAdapter('{"chapters":[{"title":"第一章","goal":"g","summary":"s","main_characters":["林墨"],"arc_role":"主线"},{"title":"第二章","goal":"g2"}]}')})
+    monkeypatch.setattr("app.planning.workspace_service.build_adapters", lambda: {"deepseek": FakeModelAdapter(SCENE_PLAN_JSON)})
+    monkeypatch.setattr("app.planning.writing_service.build_adapters", lambda: {"deepseek": FakeModelAdapter(PROSE_TEXT)})
+    created = client.post("/api/v1/works", json={"title": title}).json()
+    story_id = created["id"]
+    client.put(f"/api/v1/stories/{story_id}/idea", json={"idea_text": "记忆鉴定师调查失踪案。", "expected_version": created["version"]})
+    concept = client.post(f"/api/v1/stories/{story_id}/generations", json={"action": "generate_concept"}).json()["artifact"]
+    client.post(f"/api/v1/stories/{story_id}/concept/confirm", json={"expected_version": concept["version"]})
+    blueprints = client.post(f"/api/v1/stories/{story_id}/blueprint/generations", json={"action": "generate_blueprint"}).json()["artifacts"]
+    client.post(f"/api/v1/stories/{story_id}/blueprint/confirm", json={"expected_versions": {a["kind"]: a["version"] for a in blueprints}})
+    chapters = client.post(f"/api/v1/stories/{story_id}/chapter-plan", json={"action": "generate_chapter_plan"}).json()["chapters"]
+    chapter = chapters[0]
+    scenes = client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/generations", json={"action": "generate_scene_plan"}).json()["scenes"]
+    return story_id, chapter, scenes
+
+
+def test_generate_scene_auto_applies_prose(client, monkeypatch):
+    """Generated prose is auto-applied (author-approved auto-accept); versions are preserved."""
+    story_id, chapter, scenes = _setup_chapter_with_scenes(client, monkeypatch)
+    scene = scenes[0]
+    response = client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/generations", json={"action": "generate_scene"})
+    assert response.status_code == 200
+    produced = response.json()["prose_versions"]
+    assert produced, "应生成至少一个 Beat 正文"
+    assert all(p["status"] == "applied" for p in produced)
+    assert all(p["applied_by"] == "ai" for p in produced)
+    assert produced[0]["markdown"] == PROSE_TEXT
+    # Beat is applied immediately after generation.
+    context = client.get(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/context").json()
+    beat = context["scenes"][0]["beats"][0]
+    assert beat["status"] == "applied"
+    assert beat["latest_prose"]["status"] == "applied"
+
+
+def test_apply_beat_prose_is_append_only(client, monkeypatch):
+    story_id, chapter, scenes = _setup_chapter_with_scenes(client, monkeypatch)
+    scene = scenes[0]
+    beat = client.get(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/context").json()["scenes"][0]["beats"][0]
+    applied = client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/beats/{beat['id']}/prose-versions", json={"markdown": "作者手写正文。", "applied_by": "author", "expected_version": beat["version"]})
+    assert applied.status_code == 200
+    data = applied.json()
+    assert data["status"] == "applied"
+    assert data["applied_by"] == "author"
+    assert data["version"] == 1
+    # Append-only: second apply creates version 2, never overwrites.
+    second = client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/beats/{beat['id']}/prose-versions", json={"markdown": "修订后正文。", "applied_by": "author", "expected_version": beat["version"] + 1})
+    assert second.status_code == 200
+    assert second.json()["version"] == 2
+    assert second.json()["parent_id"] == data["id"]
+    # Stale version -> 409
+    conflict = client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/beats/{beat['id']}/prose-versions", json={"markdown": "冲突。", "applied_by": "author", "expected_version": beat["version"]})
+    assert conflict.status_code == 409
+    # History preserved
+    prose = client.get(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/beats/{beat['id']}/prose")
+    assert len(prose.json()) == 2
+    assert [p["version"] for p in prose.json()] == [1, 2]
+
+
+def test_generate_chapter_remaining_completes_chapter(client, monkeypatch):
+    story_id, chapter, scenes = _setup_chapter_with_scenes(client, monkeypatch)
+    response = client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/generations", json={"action": "generate_chapter_remaining"})
+    assert response.status_code == 200
+    produced = response.json()["prose_versions"]
+    # Every beat across every scene gets a candidate version.
+    context = client.get(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/context").json()
+    total_beats = sum(len(s["beats"]) for s in context["scenes"])
+    assert len(produced) == total_beats
+
+
+def test_regenerate_beat_creates_new_version_without_overwrite(client, monkeypatch):
+    story_id, chapter, scenes = _setup_chapter_with_scenes(client, monkeypatch)
+    scene = scenes[0]
+    beat = client.get(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/context").json()["scenes"][0]["beats"][0]
+    first = client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/generations", json={"action": "generate_scene"}).json()["prose_versions"]
+    regenerated = client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/generations", json={"action": "regenerate_beat", "beat_id": beat["id"]})
+    assert regenerated.status_code == 200
+    pv = regenerated.json()["prose_version"]
+    assert pv["version"] == 2
+    assert pv["status"] == "applied"
+    assert pv["parent_id"] == first[0]["id"]
+    # Both versions remain readable
+    prose = client.get(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/beats/{beat['id']}/prose").json()
+    assert len(prose) == 2
+    assert [p["status"] for p in prose] == ["applied", "applied"]
+
+
+def test_consistency_check_records_issues(client, monkeypatch):
+    story_id, chapter, scenes = _setup_chapter_with_scenes(client, monkeypatch)
+    scene = scenes[0]
+    # Generate with a very short prose to trigger the "too short" rule.
+    short = FakeModelAdapter("短。")
+    monkeypatch.setattr("app.planning.writing_service.build_adapters", lambda: {"deepseek": short})
+    client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/generations", json={"action": "generate_scene"})
+    issues = client.get(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/issues").json()
+    assert any(i["rule"] == "prose_too_short" for i in issues)
+
+
+def test_confirm_chapter_delta_activates_next_chapter(client, monkeypatch):
+    raw = '{"chapters":[{"title":"第一章","goal":"g1"},{"title":"第二章","goal":"g2"}]}'
+    monkeypatch.setattr("app.works.concept_service.build_adapters", lambda: {})
+    monkeypatch.setattr("app.works.blueprint_service.build_adapters", lambda: {})
+    monkeypatch.setattr("app.planning.service.build_adapters", lambda: {"deepseek": FakeModelAdapter(raw)})
+    monkeypatch.setattr("app.planning.workspace_service.build_adapters", lambda: {"deepseek": FakeModelAdapter(SCENE_PLAN_JSON)})
+    monkeypatch.setattr("app.planning.writing_service.build_adapters", lambda: {"deepseek": FakeModelAdapter(PROSE_TEXT)})
+    created = client.post("/api/v1/works", json={"title": "确认章节"}).json()
+    story_id = created["id"]
+    client.put(f"/api/v1/stories/{story_id}/idea", json={"idea_text": "测试创意", "expected_version": created["version"]})
+    concept = client.post(f"/api/v1/stories/{story_id}/generations", json={"action": "generate_concept"}).json()["artifact"]
+    client.post(f"/api/v1/stories/{story_id}/concept/confirm", json={"expected_version": concept["version"]})
+    blueprints = client.post(f"/api/v1/stories/{story_id}/blueprint/generations", json={"action": "generate_blueprint"}).json()["artifacts"]
+    client.post(f"/api/v1/stories/{story_id}/blueprint/confirm", json={"expected_versions": {a["kind"]: a["version"] for a in blueprints}})
+    chapters = client.post(f"/api/v1/stories/{story_id}/chapter-plan", json={"action": "generate_chapter_plan"}).json()["chapters"]
+    chapter = next(c for c in chapters if c["access_status"] == "active")
+    locked = next(c for c in chapters if c["access_status"] == "locked")
+    scenes = client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/generations", json={"action": "generate_scene_plan"}).json()["scenes"]
+    # Apply every beat in the chapter so the chapter can be completed.
+    context = client.get(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/context").json()
+    for scene in context["scenes"]:
+        for beat in scene["beats"]:
+            r = client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/beats/{beat['id']}/prose-versions", json={"markdown": "正文内容。", "applied_by": "author", "expected_version": beat["version"]})
+            assert r.status_code == 200, r.text
+    # Confirm chapter delta
+    confirmed = client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/deltas/confirm", json={})
+    assert confirmed.status_code == 200
+    body = confirmed.json()
+    assert body["status"] == "confirmed"
+    assert body["delta"]["scope_type"] == "chapter"
+    assert body["next_chapter"]["access_status"] == "active"
+    # Old chapter completed, next chapter active
+    assert body["chapter"]["access_status"] == "completed"
+    context2 = client.get(f"/api/v1/stories/{story_id}/chapters/{locked['id']}/context").json()
+    assert context2["chapter"]["access_status"] == "active"
+    # Living state records the confirmed delta as a NEW version (v2), with timeline events projected.
+    blueprint = client.get(f"/api/v1/stories/{story_id}/blueprint").json()
+    living_artifact = blueprint["living_state"]
+    assert living_artifact["version"] == 2
+    living = living_artifact["payload"]
+    assert living["last_confirmed_chapter"] == 1
+    assert len(living["confirmed_deltas"]) == 1
+    timeline_entries = living["domains"]["timeline"]["state"]["entries"]
+    assert any(e["name"].startswith("第 1 章") for e in timeline_entries)
+    # Version-history endpoint returns both versions, newest first.
+    history = client.get(f"/api/v1/stories/{story_id}/living-state/history").json()
+    assert [h["version"] for h in history] == [2, 1]
+    # Story stage advanced to writing
+    work = client.get(f"/api/v1/works/{story_id}").json()
+    assert work["stage"] == "writing"
+
+
+def test_living_state_versions_increment_per_confirmed_chapter(client, monkeypatch):
+    """Each confirmed chapter creates a new Living State version with projected timeline events."""
+    raw = '{"chapters":[{"title":"第一章","goal":"g1"},{"title":"第二章","goal":"g2"}]}'
+    monkeypatch.setattr("app.works.concept_service.build_adapters", lambda: {})
+    monkeypatch.setattr("app.works.blueprint_service.build_adapters", lambda: {})
+    monkeypatch.setattr("app.planning.service.build_adapters", lambda: {"deepseek": FakeModelAdapter(raw)})
+    monkeypatch.setattr("app.planning.workspace_service.build_adapters", lambda: {"deepseek": FakeModelAdapter(SCENE_PLAN_JSON)})
+    monkeypatch.setattr("app.planning.writing_service.build_adapters", lambda: {"deepseek": FakeModelAdapter(PROSE_TEXT)})
+    created = client.post("/api/v1/works", json={"title": "版本递增"}).json()
+    story_id = created["id"]
+    client.put(f"/api/v1/stories/{story_id}/idea", json={"idea_text": "测试创意", "expected_version": created["version"]})
+    concept = client.post(f"/api/v1/stories/{story_id}/generations", json={"action": "generate_concept"}).json()["artifact"]
+    client.post(f"/api/v1/stories/{story_id}/concept/confirm", json={"expected_version": concept["version"]})
+    blueprints = client.post(f"/api/v1/stories/{story_id}/blueprint/generations", json={"action": "generate_blueprint"}).json()["artifacts"]
+    client.post(f"/api/v1/stories/{story_id}/blueprint/confirm", json={"expected_versions": {a["kind"]: a["version"] for a in blueprints}})
+    chapters = client.post(f"/api/v1/stories/{story_id}/chapter-plan", json={"action": "generate_chapter_plan"}).json()["chapters"]
+    for chapter in chapters:
+        client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/generations", json={"action": "generate_scene_plan"})
+        context = client.get(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/context").json()
+        for scene in context["scenes"]:
+            for beat in scene["beats"]:
+                r = client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/beats/{beat['id']}/prose-versions", json={"markdown": "正文内容。", "applied_by": "author", "expected_version": beat["version"]})
+                assert r.status_code == 200, r.text
+        confirmed = client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/deltas/confirm", json={})
+        assert confirmed.status_code == 200, confirmed.text
+    # Living State advanced once per confirmed chapter: v1(initial) -> v2 -> v3.
+    blueprint = client.get(f"/api/v1/stories/{story_id}/blueprint").json()
+    living = blueprint["living_state"]
+    assert living["version"] == 3
+    assert living["payload"]["last_confirmed_chapter"] == 2
+    assert len(living["payload"]["confirmed_deltas"]) == 2
+    # History endpoint: newest first, each version carries projected domains.
+    history = client.get(f"/api/v1/stories/{story_id}/living-state/history").json()
+    assert [h["version"] for h in history] == [3, 2, 1]
+    assert all(h["payload"]["domains"] for h in history)
+    names = [e["name"] for e in history[0]["payload"]["domains"]["timeline"]["state"]["entries"]]
+    assert any(n.startswith("第 1 章") for n in names)
+    assert any(n.startswith("第 2 章") for n in names)
+
+
+def test_mark_subsequent_stale_after_historical_change(client, monkeypatch, tmp_path):
+    """Changing an earlier chapter marks later chapter snapshots stale."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from app.infrastructure.database import Base
+    from app.planning.models import StateSnapshot, Chapter as ChapterModel
+    from app.planning.writing_service import mark_subsequent_stale
+
+    story_id, chapter, scenes = _setup_chapter_with_scenes(client, monkeypatch)
+    # Ensure the later chapter's snapshot exists via the API (GET context builds it).
+    chapters = client.get(f"/api/v1/stories/{story_id}/chapters").json()
+    locked = next(c for c in chapters if c["access_status"] == "locked")
+    client.get(f"/api/v1/stories/{story_id}/chapters/{locked['id']}/context")
+    # The client fixture used its own engine; build an independent one on the same file.
+    engine = create_engine(f"sqlite:///{tmp_path / 'test.db'}", connect_args={"check_same_thread": False})
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    with Session() as db:
+        # Later chapter's snapshot exists; flip it stale via service.
+        later_chapters = db.query(ChapterModel).filter(ChapterModel.story_id == story_id, ChapterModel.ordinal > chapter["ordinal"]).all()
+        assert later_chapters, "应存在后续章节"
+        count = mark_subsequent_stale(db, story_id, chapter["ordinal"])
+        assert count == len(later_chapters)
+        for later in later_chapters:
+            snapshot = db.query(StateSnapshot).filter(StateSnapshot.chapter_id == later.id).first()
+            if snapshot is not None:
+                assert snapshot.status == "stale"
+            assert "重算" in (later.stale_reason or "")

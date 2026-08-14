@@ -21,6 +21,10 @@ dev = [
     "httpx>=0.28,<1",
     "pytest>=8.3,<9",
 ]
+e2e = [
+    "pytest-playwright>=0.5,<1",
+    "playwright>=1.47,<2",
+]
 
 [tool.setuptools.packages.find]
 include = ["app*"]

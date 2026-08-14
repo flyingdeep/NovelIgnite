@@ -30,6 +30,12 @@ def list_blueprint(db: Session, story_id: str) -> dict[str, dict[str, Any] | Non
     return {kind: latest_blueprint(db, story_id, kind) for kind in (*BLUEPRINT_KINDS, "living_state")}
 
 
+def list_living_state_history(db: Session, story_id: str) -> list[StoryArtifact]:
+    """All Living State versions, newest first (for the version-history modal)."""
+    get_story_or_404(db, story_id)
+    return list(db.scalars(select(StoryArtifact).where(StoryArtifact.story_id == story_id, StoryArtifact.kind == "living_state").order_by(StoryArtifact.version.desc())))
+
+
 def fallback_blueprint(idea: str, concept: dict[str, Any]) -> dict[str, dict[str, Any]]:
     summary = concept.get("summary") or idea
     return {
