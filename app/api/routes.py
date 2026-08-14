@@ -47,6 +47,7 @@ from app.planning.writing_service import (
     delta_response,
     generate_chapter_remaining,
     generate_scene,
+    generate_single_beat,
     issue_response,
     list_prose,
     mark_subsequent_stale,
@@ -219,6 +220,11 @@ def post_scene_beat_generation(story_id: str, chapter_id: str, scene_id: str, pa
     if payload.action == "generate_scene":
         produced = generate_scene(db, story_id, chapter_id, scene_id, payload)
         return {"status": "succeeded", "prose_versions": [prose_response(p) for p in produced]}
+    if payload.action == "generate_beat":
+        if not payload.beat_id:
+            raise HTTPException(status_code=422, detail="generate_beat requires beat_id")
+        pv = generate_single_beat(db, story_id, chapter_id, scene_id, payload.beat_id, payload)
+        return {"status": "succeeded", "prose_version": prose_response(pv)}
     if payload.action == "regenerate_beat":
         if not payload.beat_id:
             raise HTTPException(status_code=422, detail="regenerate_beat requires beat_id")

@@ -100,7 +100,7 @@ class BeatUpdate(BaseModel):
 
 
 class ScenePlanGenerationRequest(BaseModel):
-    action: str = Field(default="generate_scene_plan", pattern="^(generate_scene_plan|generate_beat_plan|generate_scene|generate_chapter_remaining|regenerate_beat)$")
+    action: str = Field(default="generate_scene_plan", pattern="^(generate_scene_plan|generate_beat_plan|generate_scene|generate_chapter_remaining|regenerate_beat|generate_beat)$")
     model: str | None = None
     beat_id: str | None = None
 

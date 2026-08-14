@@ -253,6 +253,24 @@ def regenerate_beat(db: Session, story_id: str, chapter_id: str, scene_id: str, 
     return _generate_beat(db, story_id, chapter, scene, beat, config, request)
 
 
+def generate_single_beat(db: Session, story_id: str, chapter_id: str, scene_id: str, beat_id: str, request: ScenePlanGenerationRequest) -> ProseVersion:
+    """Generate prose for ONE specific beat (auto-applied).
+
+    Idempotent: a beat that is already applied/completed is skipped and its
+    latest prose is returned, so callers can loop beat-by-beat safely.
+    """
+    chapter = _require_active_chapter(db, story_id, chapter_id)
+    scene = get_scene(db, chapter.id, scene_id)
+    beat = get_beat(db, scene.id, beat_id)
+    if beat.status in FINISHED_BEAT_STATUSES:
+        existing = latest_prose(db, beat.id)
+        if existing is None:
+            raise HTTPException(status_code=409, detail="Beat is finished but has no prose")
+        return existing
+    config = get_ai_config(db, story_id)
+    return _generate_beat(db, story_id, chapter, scene, beat, config, request)
+
+
 # ---------------------------------------------------------------------------
 # Delta extraction & consistency checkpoints
 # ---------------------------------------------------------------------------

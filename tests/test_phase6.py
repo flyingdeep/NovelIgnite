@@ -101,6 +101,39 @@ def test_regenerate_beat_creates_new_version_without_overwrite(client, monkeypat
     assert [p["status"] for p in prose] == ["applied", "applied"]
 
 
+def test_generate_single_beat_is_idempotent_and_per_beat(client, monkeypatch):
+    """generate_beat generates exactly one beat; repeating is idempotent (no duplicate prose)."""
+    story_id, chapter, scenes = _setup_chapter_with_scenes(client, monkeypatch)
+    scene = scenes[0]
+    context = client.get(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/context").json()
+    beats = context["scenes"][0]["beats"]
+    assert len(beats) >= 2
+    first = beats[0]
+    # Generate only the FIRST beat.
+    r = client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/generations", json={"action": "generate_beat", "beat_id": first["id"]})
+    assert r.status_code == 200, r.text
+    pv = r.json()["prose_version"]
+    assert pv["beat_id"] == first["id"]
+    assert pv["status"] == "applied"
+    assert pv["applied_by"] == "ai"
+    # The second beat is still not generated.
+    context2 = client.get(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/context").json()
+    beats2 = context2["scenes"][0]["beats"]
+    assert beats2[0]["status"] == "applied"
+    assert beats2[0]["latest_prose"]["markdown"] == PROSE_TEXT
+    assert beats2[1]["status"] in ("available", "planned")
+    assert not beats2[1].get("latest_prose")
+    # Repeating the same beat is idempotent: returns the SAME prose version, no new version.
+    r2 = client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/generations", json={"action": "generate_beat", "beat_id": first["id"]})
+    assert r2.status_code == 200
+    assert r2.json()["prose_version"]["id"] == pv["id"]
+    prose = client.get(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/beats/{first['id']}/prose").json()
+    assert len(prose) == 1
+    # Missing beat_id -> 422.
+    r3 = client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/generations", json={"action": "generate_beat"})
+    assert r3.status_code == 422
+
+
 def test_consistency_check_records_issues(client, monkeypatch):
     story_id, chapter, scenes = _setup_chapter_with_scenes(client, monkeypatch)
     scene = scenes[0]
