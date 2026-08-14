@@ -3,7 +3,7 @@
 Novel Ignite 是“作者确认优先”的 AI 小说创作 MVP。当前真实后端与原型工作台支持：
 
 ```text
-作品库 → Idea → Story Concept → Story Blueprint → Chapter Plan → Chapter Workspace → Next Chapter
+作品库 → Idea → Story Concept → Story Blueprint → Chapter Plan → Chapter Workspace → Novel Reader
 ```
 
 AI 输出始终是候选内容，只有作者显式确认或应用后才会成为权威数据。
@@ -18,6 +18,7 @@ AI 输出始终是候选内容，只有作者显式确认或应用后才会成�
 6. Chapter Plan：根据已确认 Blueprint 生成章节卡片；第 1 章为 `fixed + active`，后续章节为 `outline + locked`。
 7. Chapter Workspace：Chapter Context（Snapshot + Events + Scenes + Beats）、场景/节拍规划、正文生成与应用（append-only 版本，自动接受）、Chapter Delta 合并与作者确认、下一章激活、后续章节过期标记。
 8. 一致性检查：生成正文后自动跑确定性一致性规则（过短/占位标记），问题以提醒展示，不阻止写作。
+9. 阅读模式（全书完结）：确认最后一章 Chapter Delta 后进入结算画面（第 6 步）阅读完整小说；左侧章节列表、右侧连贯正文，Scene 作为「节」导航锚点；已完成作品从作品库直接进入阅读模式。
 
 ## 启动
 
@@ -74,6 +75,7 @@ py -3.13 -m uvicorn app.main:app --reload
 6. 确认第 1 章为 active，其余章节为 locked；锁定章节不能进入或修改。
 7. 进入 Chapter Workspace：生成场景计划 → 逐场景生成节拍计划 → 生成正文（自动应用，可再次生成新版本）→ 全部 Beat 应用后确认 Chapter Delta，Living State 升为新版本并激活下一章。
 8. 在蓝图的「Living State」页查看各版本更新履历；在已完成章节的工作台可只读查看历史。
+9. 全书完结：确认最后一章 Delta 后自动进入阅读模式，左侧章节列表 + 右侧连贯正文 + Scene「节」导航；已完成作品从作品库点击封面直接进入阅读。
 
 所有写操作使用 `expected_version` 做乐观锁；状态、版本或 Lock 冲突会返回 `409`。
 
@@ -105,6 +107,7 @@ py -3.13 -m uvicorn app.main:app --reload
 - `GET /api/v1/stories/{id}/chapters/{chapter_id}`
 - `PUT /api/v1/stories/{id}/chapters/{chapter_id}/plan`
 - `GET /api/v1/stories/{id}/chapters/{chapter_id}/context`
+- `GET /api/v1/stories/{id}/read`（全书阅读模式：所有章节 + 场景 + 已应用正文）
 - `POST /api/v1/stories/{id}/chapters/{chapter_id}/generations`（scene-plan / beat-plan / generate_scene / generate_chapter_remaining / regenerate_beat）
 - `POST /api/v1/stories/{id}/chapters/{chapter_id}/scenes/{scene_id}/generations`
 - `POST /api/v1/stories/{id}/chapters/{chapter_id}/scenes/{scene_id}/beats/{beat_id}/prose-versions`
@@ -120,7 +123,7 @@ py -3.13 -m alembic upgrade head
 py -3.13 -m pytest -q
 ```
 
-当前回归结果：**42 passed**。覆盖作品库、Idea 锁定、AI 配置、三模型适配（含思考/推理参数与官方 max token）、Concept 候选/确认与卖点规范化、Blueprint 四分类全条目渲染、Living State 初始投影、Chapter Plan 逐章激活与锁定章节保护、标题生成、可观测性指标（Phase 1–4）；Chapter Workspace 快照/上下文、Scene / Beat 规划与乐观锁、正文自动应用与版本追溯、Chapter Delta 确认与 Living State 版本递增、一致性检查（Phase 5–6）；以及 Playwright 端到端冒烟（E2E）。
+当前回归结果：**44 passed**。覆盖作品库、Idea 锁定、AI 配置、三模型适配（含思考/推理参数与官方 max token）、Concept 候选/确认与卖点规范化、Blueprint 四分类全条目渲染、Living State 初始投影、Chapter Plan 逐章激活与锁定章节保护、标题生成、可观测性指标（Phase 1–4）；Chapter Workspace 快照/上下文、Scene / Beat 规划与乐观锁、正文自动应用与版本追溯、Chapter Delta 确认与 Living State 版本递增、一致性检查、全书阅读模式数据（Phase 5–6）；以及 Playwright 端到端冒烟（E2E）。
 
 ## 目录
 

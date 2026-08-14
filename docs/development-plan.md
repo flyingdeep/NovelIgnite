@@ -10,7 +10,7 @@
 
 ## MVP 完成定义
 
-作者从作品库创建故事、输入创意、生成并确认 Concept 与 Blueprint、进入 Chapter Plan、在唯一的 Chapter Workspace 中按 Scene → Beat → Prose → Delta 顺序完成当前章写作，确认后 Story State 更新并进入下一章。
+作者从作品库创建故事、输入创意、生成并确认 Concept 与 Blueprint、进入 Chapter Plan、在唯一的 Chapter Workspace 中按 Scene → Beat → Prose → Delta 顺序完成当前章写作，确认后 Story State 更新并进入下一章；**最后一章确认后进入第 6 步阅读模式，以连贯小说方式通读全书（章节列表 + 场景节导航），完成完整创作闭环**。
 
 ---
 
@@ -174,7 +174,7 @@ Blueprint 验收：Concept 未确认时生成返回 409；四类 Baseline 候选
 |------|------|------|------|
 | 后端单元测试 | `tests/test_phase1.py` | 24 | ✅ 全部通过 |
 | 后端单元测试 | `tests/test_phase5.py` | 7 | ✅ 全部通过 |
-| 后端单元测试 | `tests/test_phase6.py` | 9 | ✅ 全部通过 |
+| 后端单元测试 | `tests/test_phase6.py` | 10 | ✅ 全部通过 |
 | E2E 冒烟测试 | `tests/e2e/test_smoke.py` | 3 | ✅ 全部通过 |
 | E2E 全流程测试 | `tests/e2e/test_full_flow.py` | 14 | ⏳ 待优化（pytest-playwright 时序问题） |
 
@@ -227,3 +227,4 @@ playwright install chromium
 - 2026-08-14：清理归档代码与文档：删除 `app_v1_archived/`（旧 v1 实现）、`tests_v1_archived/`（旧测试）、`migrations/versions_v1_archived/`（旧迁移）、`docs/development-plan-v1-archived.md`（旧开发计划）、`docs/LLM接入临时参考.md`（内容已并入 README 模型接入表）。同步更新 README（可操作范围扩展至 Phase 6、API 列表补充 Chapter Workspace / Delta / Issue / Living State 历史端点、测试数更新为 42、目录移除归档行）、`docs/development-plan.md` Phase 1 交付证据与变更日志、`docs/technical-architecture.html` 页脚（归档引用改为「已清理，Git 历史可追溯」）。本地旧库备份 `novel_ignite_v1_archived.db` 保留（gitignore 排除，不提交）。
 - 2026-08-14：前端主界面挂载路径由 `/prototype/` 移至根路径 `/`：`app/main.py` 中 `app.mount("/prototype", …)` 改为 `app.mount("/", …)`（注意 mount 必须注册在 `/health`、`/metrics` 之后，避免根路径挂载拦截 API/健康检查；`/docs`、`/openapi.json` 由 FastAPI 初始化注册不受影响），no-store 缓存中间件由 `/prototype/` 前缀改为「非 `/api/` 路径」全部 no-store；E2E 测试 13 处 URL 由 `…/prototype/` 改为 `…/`；README 访问地址更新为 `http://127.0.0.1:8000/`。前端文件仍组织在 `prototype/` 目录（资源引用为相对路径、API 为绝对路径，均与挂载路径解耦，无需改动）。浏览器实测根路径直接打开作品库、`/health`、`/metrics`、`/docs`、`/api/v1/works` 均 200，E2E 冒烟 3 项通过。
 - 2026-08-14：工作台生成体验两项改进：① **进入工作台自动生成场景与节拍计划**——`loadWorkspaceContext` 加载后若激活章节（`access_status=active`）无场景计划则自动调用 `generate_scene_plan`，有场景但缺节拍则逐场景自动调用 `generate_beat_plan`（带进度提示），全程无需手动点击；已完成/锁定章节不触发。② **生成过程显示细节进度**——新增后端 `generate_beat` action（`generate_single_beat`，单 Beat 生成、幂等：已应用 Beat 直接返回现有版本不重复生成）与前端逐 Beat 调用：生成整个 Scene / 完成本章剩余 / 一键生成整个章节均改为逐 Beat 请求，thinking 覆盖层实时显示「Scene X/N · Beat Y/M：名称」+ 进度条（已应用段数）；`#thinking-progress` 进度条样式与 `setThinkingProgress` 辅助函数新增。修复：自动生成完成后 `hideThinking` 未调用导致覆盖层残留（现已在完成/异常分支清理）。静态资源 bump `v20260815e`。新增测试 `test_generate_single_beat_is_idempotent_and_per_beat`。43 项 pytest 通过；浏览器实测「寒冬归途」Scene 1 生成时进度依次显示 Beat 2→3→4→5 与已应用 0→3/4 段；新建「自动生成验证」故事进入工作台自动生成 4 场景 × 5 Beat，无需手动点击。
+- 2026-08-14：新增**第 6 步·阅读模式（全书完结结算画面）**：① 后端 `get_story_reader` + 端点 `GET /stories/{sid}/read`——返回所有章节（含已完成）的场景与已应用正文（仅 applied prose，planned 内容剔除），按章节/场景/Beat 顺序组装。② 前端步骤条新增「6 阅读」，新增 `read` screen：左侧章节列表（含「✓ 已完成 · N 段」状态与 Scene 序号锚点）、右侧连贯正文（不再分 Beat，Scene 作为「节」标题与导航锚点）。③ 确认最后一章 Chapter Delta 后不再回到旧工作台（此前显示「尚无激活章节」），改为跳转阅读模式并 toast「🎉 全书已完成」；作品库中已完成作品（`stage=done`）点击封面直接进入第 6 步阅读。④ 修复：Scene 锚点嵌套在章节按钮内被 `closest('[data-read-chapter]')` 吞掉（改为先判 scene 再判 chapter）；smooth scroll 在 headless 下不可靠改为即时滚动。静态资源 bump `v20260816e`。新增测试 `test_story_reader_returns_continuous_prose`。44 项 pytest 通过；浏览器实测「寒冬归途」（6 章全部 completed）点击封面直接进入阅读模式，左侧 6 章目录 + 15 个 Scene 锚点，右侧连续正文，第 6 章 Scene 3 锚点点击滚动到目标场景（scrollY 20345）。

@@ -237,6 +237,30 @@ def test_living_state_versions_increment_per_confirmed_chapter(client, monkeypat
     assert any(n.startswith("第 2 章") for n in names)
 
 
+def test_story_reader_returns_continuous_prose(client, monkeypatch):
+    """Reading mode returns every chapter with scenes and applied beat prose."""
+    story_id, chapter, scenes = _setup_chapter_with_scenes(client, monkeypatch)
+    scene = scenes[0]
+    # Generate prose for the whole scene (auto-applied).
+    client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/generations", json={"action": "generate_scene"})
+    # Reader endpoint: chapter 1 has applied prose, chapter 2 has none yet.
+    reader = client.get(f"/api/v1/stories/{story_id}/read")
+    assert reader.status_code == 200
+    body = reader.json()
+    assert body["story"]["id"] == story_id
+    assert len(body["chapters"]) >= 2
+    ch1 = body["chapters"][0]
+    assert ch1["access_status"] in ("active", "completed")
+    # Only beats with applied prose appear; scene order preserved.
+    scene0 = ch1["scenes"][0]
+    assert scene0["beats"], "first scene should carry generated prose"
+    assert all(b["markdown"] for b in scene0["beats"])
+    assert all(b["beat_name"] for b in scene0["beats"])
+    # Second chapter has no prose yet -> scenes empty of beats.
+    ch2 = body["chapters"][1]
+    assert all(not s["beats"] for s in ch2["scenes"])
+
+
 def test_mark_subsequent_stale_after_historical_change(client, monkeypatch, tmp_path):
     """Changing an earlier chapter marks later chapter snapshots stale."""
     from sqlalchemy import create_engine

@@ -387,6 +387,10 @@ let blueprintHasData = false;
 // Phase 5 workspace state: real API context when available
 let currentWorkspaceContext = null;
 let currentActiveChapterId = null;
+// Phase 6+ reader state: full-novel reading mode (step 6)
+let readerData = null;
+let readerActiveChapter = null;
+let readerActiveScene = null;
 const API_BASE = "/api/v1";
 let apiAvailable = false;
 
@@ -589,6 +593,7 @@ function showScreen(id) {
   if (id === "concept") loadConceptForCurrentStory();
   if (id === "blueprint") loadBlueprintForCurrentStory();
   if (id === "chapters") loadChaptersForCurrentStory();
+  if (id === "read") loadReaderForCurrentStory();
   updateTopState();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
@@ -1150,6 +1155,100 @@ function renderWorkspace() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Phase 6+: reading mode (step 6) — continuous novel, Scene as section anchors
+// ---------------------------------------------------------------------------
+
+async function loadReaderForCurrentStory() {
+  const book = currentBook();
+  if (!apiAvailable || !book) return;
+  const content = document.querySelector("#reader-content");
+  content.innerHTML = `<div class="reader-empty"><h3>正在装载小说…</h3><p>正在汇编各章正文与场景。</p></div>`;
+  try {
+    readerData = await apiRequest(`/stories/${book.id}/read`, { timeoutMs: 60000 });
+    const chapters = readerData.chapters || [];
+    if (!chapters.length || !chapters.some((c) => (c.scenes || []).some((s) => (s.beats || []).length))) {
+      content.innerHTML = `<div class="reader-empty"><h3>尚无正文可读</h3><p>完成章节写作并确认 Chapter Delta 后，正文会在此以连贯小说呈现。</p></div>`;
+      renderReaderToc(chapters);
+      document.querySelector("#read-status").textContent = "写作中 · 尚未完结";
+      document.querySelector("#read-status").className = "tag";
+      return;
+    }
+    // First chapter with any prose becomes the initial view.
+    const firstWithProse = chapters.find((c) => (c.scenes || []).some((s) => (s.beats || []).length)) || chapters[0];
+    readerActiveChapter = firstWithProse.id;
+    readerActiveScene = null;
+    renderReaderToc(chapters);
+    renderReaderChapter(firstWithProse);
+    const done = chapters.length && chapters.every((c) => c.access_status === "completed");
+    document.querySelector("#read-status").textContent = done ? "已完成 · 全书完结" : "写作中 · 部分完成";
+    document.querySelector("#read-status").className = done ? "tag blue" : "tag";
+  } catch (error) {
+    content.innerHTML = `<div class="reader-empty"><h3>阅读内容加载失败</h3><p>请稍后重试。</p></div>`;
+  }
+}
+
+function renderReaderToc(chapters) {
+  const list = document.querySelector("#reader-toc-list");
+  document.querySelector("#reader-chapter-count").textContent = `${chapters.length} 章`;
+  if (!chapters.length) { list.innerHTML = `<div class="reader-empty" style="padding:16px 8px"><p>暂无章节</p></div>`; return; }
+  list.innerHTML = chapters.map((c) => {
+    const beatCount = (c.scenes || []).reduce((n, s) => n + (s.beats || []).length, 0);
+    const hasProse = (c.scenes || []).some((s) => (s.beats || []).length);
+    const statusTag = c.access_status === "completed" ? `<small style="color:#4ade80">✓ 已完成 · ${beatCount} 段</small>` : (hasProse ? `<small>进行中 · ${beatCount} 段</small>` : `<small>尚未写作</small>`);
+    const sceneAnchors = (c.scenes || []).filter((s) => (s.beats || []).length).map((s) => `<span class="scene-anchor" data-read-scene="${c.id}|${s.id}">${s.ordinal}</span>`).join("");
+    return `<button class="reader-chapter-link ${c.id === readerActiveChapter ? "active" : ""}" type="button" data-read-chapter="${c.id}"><b>第 ${c.ordinal} 章 · ${c.title || "未命名"}</b>${statusTag}${sceneAnchors ? `<span class="scene-anchors">${sceneAnchors}</span>` : ""}</button>`;
+  }).join("");
+}
+
+function renderReaderChapter(chapter) {
+  readerActiveChapter = chapter.id;
+  const content = document.querySelector("#reader-content");
+  const scenes = (chapter.scenes || []).filter((s) => (s.beats || []).length);
+  const beatsTotal = scenes.reduce((n, s) => n + s.beats.length, 0);
+  document.querySelector("#read-title").textContent = `${chapter.title || "未命名章节"}`;
+  document.querySelectorAll(".reader-chapter-link").forEach((el) => el.classList.toggle("active", el.dataset.readChapter === chapter.id));
+  if (!scenes.length) {
+    content.innerHTML = `<div class="reader-empty"><h3>本章暂无正文</h3><p>完成本章写作并确认 Delta 后即可阅读。</p></div>`;
+    return;
+  }
+  const scenesHtml = scenes.map((scene) => {
+    const sub = [scene.location, scene.time].filter(Boolean).join(" · ");
+    const proseHtml = scene.beats.map((b) => `<div class="reader-prose"><p>${escapeHtml(b.markdown || "")}</p></div>`).join("");
+    return `<section class="reader-scene-section" id="scene-${chapter.id}-${scene.id}">
+      <h3>${escapeHtml(scene.title || `场景 ${scene.ordinal}`)}</h3>${sub ? `<p class="reader-scene-sub">${escapeHtml(sub)}</p>` : ""}
+      ${proseHtml}
+    </section>`;
+  }).join("");
+  content.innerHTML = `
+    <h2>第 ${chapter.ordinal} 章 · ${escapeHtml(chapter.title || "未命名章节")}</h2>
+    <p class="reader-chapter-meta">${beatsTotal} 段正文 · ${scenes.length} 个场景 · 已确认 Delta 后投影</p>
+    ${scenesHtml}`;
+  // Reset any pending scene anchor.
+  readerActiveScene = null;
+}
+
+function readerScrollToScene(chapterId, sceneId) {
+  if (chapterId !== readerActiveChapter) {
+    const chapter = (readerData.chapters || []).find((c) => c.id === chapterId);
+    if (chapter) renderReaderChapter(chapter);
+  }
+  readerActiveScene = sceneId;
+  document.querySelectorAll(".scene-anchor").forEach((el) => el.classList.toggle("current", el.dataset.readScene === `${chapterId}|${sceneId}`));
+  // Immediate scroll is reliable in every environment (including headless).
+  const el = document.getElementById(`scene-${chapterId}-${sceneId}`);
+  if (!el) return;
+  const currentY = window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0;
+  const top = Math.max(0, el.getBoundingClientRect().top + currentY - 90);
+  window.scrollTo(0, top);
+  document.documentElement.scrollTop = top;
+  document.body.scrollTop = top;
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+}
+
 function bindWorkspaceEvents() {
   document.querySelectorAll(".scene-item[data-scene]").forEach((button) => button.addEventListener("click", () => {
     activeScene = button.dataset.scene;
@@ -1261,10 +1360,17 @@ function bindWorkspaceEvents() {
       const result = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/deltas/confirm`, { method: "POST", body: JSON.stringify({}) });
       if (result.next_chapter) {
         currentActiveChapterId = result.next_chapter.id;
+        currentWorkspaceContext = null;
+        await loadWorkspaceContext();
+        toast(`本章已完成，第 ${result.next_chapter.ordinal} 章已激活。`);
+      } else {
+        // Last chapter finished — the whole novel is complete. Show the settlement screen (step 6 reader).
+        book.status = "completed";
+        currentActiveChapterId = null;
+        currentWorkspaceContext = null;
+        showScreen("read");
+        toast("🎉 全书已完成！进入阅读模式查看完整小说。");
       }
-      currentWorkspaceContext = null;
-      await loadWorkspaceContext();
-      toast(result.next_chapter ? `本章已完成，第 ${result.next_chapter.ordinal} 章已激活。` : "全书已完成。");
     } catch (error) { toast("Delta 确认失败。"); }
     finally { hideThinking(); }
   }));
@@ -1414,6 +1520,20 @@ function bindEvents() {
     if (button.dataset.nav === "workspace") currentActiveChapterId = null; // stepbar always targets the active chapter
     showScreen(button.dataset.nav);
   }));
+  document.querySelector("#reader-toc-list").addEventListener("click", (event) => {
+    // Scene anchors take priority: they are nested inside chapter buttons.
+    const sceneEl = event.target.closest("[data-read-scene]");
+    if (sceneEl) {
+      const [chapterId, sceneId] = sceneEl.dataset.readScene.split("|");
+      readerScrollToScene(chapterId, sceneId);
+      return;
+    }
+    const chapterBtn = event.target.closest("[data-read-chapter]");
+    if (chapterBtn) {
+      const chapter = (readerData.chapters || []).find((c) => c.id === chapterBtn.dataset.readChapter);
+      if (chapter) renderReaderChapter(chapter);
+    }
+  });
   document.querySelectorAll("[data-toast]").forEach((button) => button.addEventListener("click", () => toast(button.dataset.toast)));
   document.querySelector("#idea-input").addEventListener("input", (event) => {
     document.querySelector("#idea-count").textContent = `${event.target.value.length} / 2,000`;
@@ -1625,7 +1745,13 @@ function bindEvents() {
     const open = event.target.closest("[data-open]");
     if (open) {
       activeBook = open.dataset.open;
-      showScreen("idea");
+      const book = books.find((b) => b.id === activeBook);
+      // Completed works open directly into the reading mode (step 6).
+      if (book && book.stage === "done") {
+        showScreen("read");
+      } else {
+        showScreen("idea");
+      }
       return;
     }
     const del = event.target.closest(".delete-book");

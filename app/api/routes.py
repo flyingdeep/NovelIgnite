@@ -35,6 +35,7 @@ from app.planning.workspace_service import (
     generate_beat_plan,
     generate_scene_plan,
     get_chapter_context,
+    get_story_reader,
     scene_response,
     update_beat,
     update_event,
@@ -198,6 +199,12 @@ def put_story_chapter_plan(story_id: str, chapter_id: str, payload: ChapterPlanU
 @router.get("/stories/{story_id}/chapters/{chapter_id}/context")
 def get_story_chapter_context(story_id: str, chapter_id: str, db: Session = Depends(get_db)):
     return get_chapter_context(db, story_id, chapter_id)
+
+
+@router.get("/stories/{story_id}/read")
+def get_story_reader_endpoint(story_id: str, db: Session = Depends(get_db)):
+    """Reading-mode payload: all chapters with continuous applied prose."""
+    return get_story_reader(db, story_id)
 
 
 @router.post("/stories/{story_id}/chapters/{chapter_id}/generations")

@@ -179,6 +179,47 @@ def get_chapter_context(db: Session, story_id: str, chapter_id: str) -> dict[str
     }
 
 
+def get_story_reader(db: Session, story_id: str) -> dict[str, Any]:
+    """Assemble the full reading-mode payload for a story.
+
+    Returns every chapter (oldest first) with its scenes, and each scene's beats
+    carrying the latest applied prose. The frontend renders a continuous novel:
+    left = chapter list, right = content, Scene acts as a "节" navigation anchor.
+    Only applied prose is included; planned content is excluded.
+    """
+    from app.planning.service import list_chapters
+    from app.planning.models import ProseVersion
+
+    story = get_story_or_404(db, story_id)
+    chapters = list_chapters(db, story_id)
+    chapter_data = []
+    for chapter in chapters:
+        scenes = list(db.scalars(select(Scene).where(Scene.chapter_id == chapter.id).order_by(Scene.ordinal)))
+        scene_data = []
+        for scene in scenes:
+            beats = list(db.scalars(select(Beat).where(Beat.scene_id == scene.id).order_by(Beat.ordinal)))
+            beat_paras = []
+            for beat in beats:
+                prose = db.scalar(select(ProseVersion).where(ProseVersion.beat_id == beat.id, ProseVersion.status == "applied").order_by(ProseVersion.version.desc()))
+                if prose is None:
+                    continue
+                beat_paras.append({"beat_name": beat.name or f"Beat {beat.ordinal}", "markdown": prose.markdown})
+            scene_data.append({"id": scene.id, "ordinal": scene.ordinal, "title": scene.title, "location": scene.location, "time": scene.time, "beats": beat_paras})
+        chapter_data.append({
+            "id": chapter.id,
+            "ordinal": chapter.ordinal,
+            "title": chapter.title,
+            "goal": chapter.goal,
+            "summary": chapter.summary,
+            "access_status": chapter.access_status,
+            "scenes": scene_data,
+        })
+    return {
+        "story": {"id": story.id, "title": story.title, "stage": story.stage},
+        "chapters": chapter_data,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Chapter Events
 # ---------------------------------------------------------------------------

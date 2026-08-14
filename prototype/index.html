@@ -23,7 +23,8 @@
       <button class="step flow-step" type="button" data-nav="concept"><span>2</span><b>概念</b></button><i class="flow-arrow">→</i>
       <button class="step flow-step" type="button" data-nav="blueprint"><span>3</span><b>蓝图</b></button><i class="flow-arrow">→</i>
       <button class="step flow-step" type="button" data-nav="chapters"><span>4</span><b>章节</b></button><i class="flow-arrow">→</i>
-      <button class="step flow-step" type="button" data-nav="workspace"><span>5</span><b>工作台</b></button>
+      <button class="step flow-step" type="button" data-nav="workspace"><span>5</span><b>工作台</b></button><i class="flow-arrow">→</i>
+      <button class="step flow-step" type="button" data-nav="read"><span>6</span><b>阅读</b></button>
     </nav>
 
     <main class="main-area">
@@ -74,6 +75,18 @@
           </div>
         </section>
 
+        <section class="screen" id="read">
+          <div class="read-heading"><div><p class="eyebrow">STEP 06 · NOVEL READER</p><div class="title-with-actions"><h1 id="read-title">小说阅读</h1><span id="read-status" class="tag blue">已完成 · 全书完结</span><button class="config-button" type="button" data-config>⚙ 生成设置</button></div><p>连贯阅读完整小说。左侧为章节列表，右侧为正文；Scene 作为「节」导航。</p></div></div>
+          <div class="reader-grid">
+            <aside class="reader-toc panel">
+              <div class="reader-toc-head"><p>目录</p><b id="reader-chapter-count"></b></div>
+              <div class="reader-toc-list" id="reader-toc-list"></div>
+              <div class="reader-toc-foot"><span>✦</span>全书已完成，可自由翻阅。</div>
+            </aside>
+            <section class="reader-content panel" id="reader-content"></section>
+          </div>
+        </section>
+
         <section class="screen" id="models">
           <div class="page-heading"><div><p class="eyebrow">MODEL CONTROL CENTER</p><h1>模型管理</h1><p>在服务端集中维护 OpenAI Chat Completions 兼容模型。浏览器只保存显示状态，真实密钥永不返回前端。</p></div><div class="heading-actions"><button class="secondary-button" type="button" id="add-model">＋ 添加模型配置</button><button class="primary-button" type="button" id="save-models">保存路由策略</button></div></div>
           <div class="model-notice"><span>◈</span><p><b>安全边界：</b>真实实现中 API Key 仅由服务端环境读取；生成记录保存参数快照、上下文引用与输出摘要，不保存完整提示词或正文。</p></div>
@@ -106,6 +119,6 @@
     </div>
   </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="app.js?v=20260815e"></script>
+  <script src="app.js?v=20260816e"></script>
 </body>
 </html>
