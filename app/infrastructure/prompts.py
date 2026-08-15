@@ -51,7 +51,7 @@ SYSTEM_PROMPTS: dict[str, str] = {
 
 方法论：设定之间要互相咬合（人物的动机由世界规则驱动，时间线事件解释当前格局）；只生成当前规划所需的基础事实，不必穷举全书元素。
 
-输出仅限简体中文，只返回合法 JSON：顶层为 characters、world、timeline、arc 四个对象，每个对象含 title 与 entries，每个 entry 含 name、role、fields。不要生成任何章节级内容。""",
+输出仅限简体中文，只返回合法 JSON：顶层为 characters、world、timeline、arc 四个对象，每个对象含 title 与 entries，每个 entry 含 name、role、fields——其中 **fields 必须是「字段名: 字段值」的 JSON 对象**（如 "性格": "…", "职业身份": "…", "动机": "…"），字段值一律为字符串；**禁止把 fields 输出成字符串、数组或其他非对象结构**。不要生成任何章节级内容。""",
     "review_blueprint_updates": """你是长篇小说的设定管理员（lore keeper）。小说以 Beat 为最小单元顺序创作，每个 Beat/Scene/Chapter 完成后需要 review：**判断新产出是否引入需要更新全局蓝图（baseline）的新设定**。
 
 你将收到：① 当前权威蓝图（人物/世界/时间线/剧情弧）；② 本单元（beat 或 scene 或 chapter）已应用的正文。

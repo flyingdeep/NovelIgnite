@@ -567,18 +567,54 @@ async function loadConceptForCurrentStory() {
   }
 }
 
+const BLUEPRINT_FIELD_KEYWORDS = ["性格特质", "性格", "职业身份", "职业", "身份", "动机", "目标", "缺陷", "欲望与软肋", "软肋", "欲望", "初始关系", "核心关系", "关系", "背景故事", "背景", "秘密与伏笔", "秘密", "伏笔", "能力与限制", "能力", "创作约束", "约束", "外貌", "形象", "关键事件", "结局", "规则", "设定"];
+
+// 后端或模型可能把 fields 输出成对象 / 二维数组 / 字符串；统一归一化为 [label, value] 列表，
+// 避免 Object.entries(字符串) 把字段逐字拆散成「0性 1格 2冷…」矩阵。
+function normalizeUiFields(fields) {
+  const fmt = (v) => (Array.isArray(v) ? v.join("；") : String(v == null ? "" : v));
+  if (Array.isArray(fields)) {
+    return fields.map((f) => {
+      if (Array.isArray(f) && f.length >= 2) return [fmt(f[0]), fmt(f[1])];
+      return ["设定", fmt(f)];
+    });
+  }
+  if (typeof fields === "string") {
+    const segments = fields.split(/[；;。\n]/).map((s) => s.trim()).filter(Boolean);
+    if (!segments.length) return [["设定", fields]];
+    const out = [];
+    let counter = 1;
+    for (const seg of segments) {
+      let label = null, value = seg;
+      const m = seg.match(/^(.{1,8}?)[为是:：](.+)$/);
+      if (m && m[2].trim()) { label = m[1].trim(); value = m[2].trim(); }
+      if (label === null) {
+        const matched = BLUEPRINT_FIELD_KEYWORDS.find((k) => seg.startsWith(k));
+        if (matched) { label = matched; value = seg.slice(matched.length).replace(/^[为是:：、，\s]+/, ""); }
+        else { label = "设定" + counter++; }
+      }
+      if (out.some(([l]) => l === label)) label = label + counter++;
+      out.push([label, value]);
+    }
+    return out;
+  }
+  if (fields && typeof fields === "object") {
+    return Object.entries(fields).map(([label, value]) => [label, fmt(value)]);
+  }
+  return [["设定", fmt(fields)]];
+}
+
 function blueprintPayloadToUi(kind, artifact) {
   if (!blueprintData[kind]) return;
   const entries = artifact?.payload && Array.isArray(artifact.payload.entries) ? artifact.payload.entries : [];
   blueprintData[kind].entries = entries.map((entry) => {
-    const fields = entry.fields || {};
     return {
       name: entry.name || kind,
       role: entry.role || "全局设定",
       version: artifact.version,
       updated: artifact.updated_at?.slice(0, 10) || "刚刚",
       lock: artifact.locked_paths?.length ? "部分字段已锁定" : "",
-      fields: Object.entries(fields).map(([label, value]) => [label, Array.isArray(value) ? value.join("；") : String(value)]),
+      fields: normalizeUiFields(entry.fields),
       history: [{ version: `v${artifact.version}`, date: artifact.updated_at?.slice(0, 10) || "刚刚", by: artifact.status === "confirmed" ? "作者确认" : "AI 候选", note: "来自真实 Blueprint API", detail: "当前版本从后端 Story Artifact 读取。" }],
     };
   });
@@ -599,8 +635,7 @@ function livingPayloadToUi(artifact) {
     const state = domains[key]?.state || {};
     const list = Array.isArray(state.entries) ? state.entries : [];
     const fields = list.map((entry) => {
-      const f = entry.fields || {};
-      const lines = Object.entries(f).map(([k, v]) => `${k}：${Array.isArray(v) ? v.join("；") : v}`);
+      const lines = normalizeUiFields(entry.fields).map(([k, v]) => `${k}：${v}`);
       return [entry.name || key, lines.join("；") || "（无明细）"];
     });
     entries.push({

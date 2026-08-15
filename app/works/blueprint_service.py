@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from fastapi import HTTPException
@@ -109,6 +110,7 @@ def normalize_blueprint_payload(payload: Any, idea: str, concept: dict[str, Any]
     if isinstance(payload, dict):
         source = payload.get("blueprint") if isinstance(payload.get("blueprint"), dict) else payload
         if all(isinstance(source.get(kind), dict) for kind in BLUEPRINT_KINDS):
+            _normalize_kind_entries(source)
             return source, False
         if isinstance(source.get("categories"), list):
             payload = source["categories"]
@@ -122,8 +124,11 @@ def normalize_blueprint_payload(payload: Any, idea: str, concept: dict[str, Any]
             if key:
                 mapped[key] = item
         if all(kind in mapped for kind in BLUEPRINT_KINDS):
+            _normalize_kind_entries(mapped)
             return mapped, False
-    return fallback_blueprint(idea, concept), True
+    fallback = fallback_blueprint(idea, concept)
+    _normalize_kind_entries(fallback)
+    return fallback, True
 
 
 def _blueprint_scale_for_length(length: str) -> str:
@@ -134,6 +139,85 @@ def _blueprint_scale_for_length(length: str) -> str:
     if any(k in low for k in ("长篇", "长剧", "长片", "十万", "几十万")):
         return "本作为长篇/复杂剧情：请充实设定——总出场人物 12-20 人（主角/盟友宿敌/反派核心/支线配角分层），世界观 3-4 个功能区域、3-5 个组织势力与制衡关系，时间线 3-5 条关键前史，剧情弧主线 + 2-3 条支线/暗线。"
     return "本作篇幅中等：设定适度——总出场人物 6-12 人，世界 3 个功能区域、2-3 个组织，时间线 2-3 条关键前史，剧情弧主线 + 1 条支线。"
+
+
+_FIELD_KEYWORDS = (
+    "性格特质", "性格", "职业身份", "职业", "身份", "动机", "目标", "缺陷",
+    "欲望与软肋", "软肋", "欲望", "初始关系", "核心关系", "关系", "背景故事", "背景",
+    "秘密与伏笔", "秘密", "伏笔", "能力与限制", "能力", "创作约束", "约束",
+    "外貌", "形象", "关键事件", "结局", "规则", "设定",
+)
+
+
+def _fields_from_string(text: str) -> dict[str, str]:
+    """把模型输出的字符串 fields（如「性格…；职业身份为…」）拆成 {label: value}。
+
+    按分号/句号切段，逐段提取标签：优先取「为/是/：」前的短词，其次匹配已知
+    字段关键词前缀，兜底用「设定N」。避免把整个字符串塞进单个字段或逐字拆散。
+    """
+    text = (text or "").strip()
+    if not text:
+        return {"设定": ""}
+    segments = [s.strip() for s in re.split(r"[；;。\n]", text) if s.strip()]
+    out: dict[str, str] = {}
+    counter = 1
+    for seg in segments:
+        label: str | None = None
+        value: str = seg
+        m = re.match(r"^(.{1,8}?)[为是:：](.+)$", seg)
+        if m:
+            label, value = m.group(1).strip(), m.group(2).strip()
+            if not value:
+                label, value = None, seg
+        if label is None:
+            matched = next((k for k in _FIELD_KEYWORDS if seg.startswith(k)), None)
+            if matched:
+                label, value = matched, seg[len(matched):].lstrip("为是:：、， ")
+            else:
+                label = f"设定{counter}"
+                counter += 1
+        key = label
+        while key in out:
+            key = f"{label}{counter}"
+            counter += 1
+        out[key] = value
+    return out or {"设定": text}
+
+
+def _normalize_fields(fields: Any) -> dict[str, str]:
+    """把模型输出的 fields 规范化为 {label: value} 字典（兼容 dict / 二维数组 / 字符串）。"""
+    if isinstance(fields, dict):
+        out: dict[str, str] = {}
+        for k, v in fields.items():
+            out[str(k)] = v if isinstance(v, str) else ("；".join(str(x) for x in v) if isinstance(v, (list, tuple)) else str(v))
+        return out
+    if isinstance(fields, (list, tuple)):
+        out = {}
+        for f in fields:
+            if isinstance(f, (list, tuple)) and len(f) >= 2:
+                k, v = str(f[0]), f[1]
+                out[k] = v if isinstance(v, str) else ("；".join(str(x) for x in v) if isinstance(v, (list, tuple)) else str(v))
+            elif f is not None:
+                out[str(f)] = ""
+        return out or {"设定": ""}
+    if isinstance(fields, str):
+        return _fields_from_string(fields)
+    return {"设定": ""}
+
+
+def _normalize_kind_entries(payload: dict[str, dict[str, Any]]) -> None:
+    """规范化四个 kind 中每个 entry 的 fields，保证入库结构稳定为 {label: value}。"""
+    for kind in BLUEPRINT_KINDS:
+        block = payload.get(kind)
+        if not isinstance(block, dict):
+            continue
+        entries = block.get("entries")
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            entry["fields"] = _normalize_fields(entry.get("fields"))
 
 
 def generate_blueprint(db: Session, story_id: str, request: BlueprintGenerationRequest) -> list[StoryArtifact]:
@@ -219,15 +303,17 @@ def confirm_blueprint(db: Session, story_id: str, data: BlueprintConfirm) -> lis
         artifact.status = "confirmed"
     living = latest_blueprint(db, story_id, "living_state")
     if living is None:
+        living_domains: dict[str, Any] = {}
+        for kind, artifact in zip(BLUEPRINT_KINDS, artifacts):
+            state = json.loads(artifact.payload)
+            _normalize_kind_entries({kind: state})
+            living_domains[kind] = {"source_ref": artifact.id, "version": artifact.version, "state": state}
         living_payload = {
             "source": "initial_story_state",
             "temporal_scope": "story_start",
             "certainty": "confirmed",
             "context_policy": "always",
-            "domains": {
-                kind: {"source_ref": artifact.id, "version": artifact.version, "state": json.loads(artifact.payload)}
-                for kind, artifact in zip(BLUEPRINT_KINDS, artifacts)
-            },
+            "domains": living_domains,
         }
         living = StoryArtifact(
             story_id=story_id,

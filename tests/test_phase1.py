@@ -426,6 +426,34 @@ def test_concept_candidate_edit_confirm_and_idea_lock(client, monkeypatch):
     assert client.post(f"/api/v1/stories/{story_id}/concept/confirm", json={"expected_version": confirmed.json()["version"]}).status_code == 409
 
 
+def test_normalize_blueprint_fields_from_string_and_array():
+    """模型把 fields 输出成字符串或二维数组时，必须被规范化为 {label: value}，不得逐字拆散。"""
+    from app.works.blueprint_service import normalize_blueprint_payload
+
+    raw = {
+        "characters": {"title": "人物", "entries": [{
+            "name": "林晚晴",
+            "role": "主角/特警突击手",
+            "fields": "性格冷峻果决、体能反应顶尖；职业身份为市局特警支队骨干；动机是完成斩断贩卖链的誓言；缺陷是过度依赖理智与控制欲；初始关系为独立执行任务。",
+        }]},
+        "world": {"title": "世界", "entries": [{"name": "岛屿", "role": "主舞台", "fields": [["description", "离岸管制岛屿"], ["rules", "禁航区"]]}]},
+        "timeline": {"title": "初始时间线", "entries": [{"name": "开场", "role": "初始状态", "fields": {"before_story": "三年前行动失败"}}]},
+        "arc": {"title": "故事弧", "entries": [{"name": "主线", "role": "方向", "fields": {"premise": "斩断贩卖链"}}]},
+    }
+    payload, fallback_used = normalize_blueprint_payload(raw, "孤岛卧底", {})
+    assert fallback_used is False
+    char_fields = payload["characters"]["entries"][0]["fields"]
+    assert isinstance(char_fields, dict)
+    # 字符串被正确切分，而不是整个塞进一个字段或逐字拆散。
+    assert "性格" in char_fields and "冷峻果决、体能反应顶尖" in char_fields["性格"]
+    assert char_fields["职业身份"] == "市局特警支队骨干"
+    assert char_fields["动机"].startswith("完成斩断贩卖链")
+    assert "缺陷" in char_fields and "初始关系" in char_fields
+    # 二维数组被转成字典；对象保持不变。
+    assert payload["world"]["entries"][0]["fields"] == {"description": "离岸管制岛屿", "rules": "禁航区"}
+    assert payload["timeline"]["entries"][0]["fields"] == {"before_story": "三年前行动失败"}
+
+
 def test_blueprint_categories_edit_and_confirm(client, monkeypatch):
     monkeypatch.setattr("app.works.concept_service.build_adapters", lambda: {})
     monkeypatch.setattr("app.works.blueprint_service.build_adapters", lambda: {})
