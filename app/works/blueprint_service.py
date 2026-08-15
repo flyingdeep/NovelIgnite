@@ -26,6 +26,29 @@ def latest_blueprint(db: Session, story_id: str, kind: str) -> StoryArtifact | N
     return db.scalar(select(StoryArtifact).where(StoryArtifact.story_id == story_id, StoryArtifact.kind == kind).order_by(StoryArtifact.version.desc()))
 
 
+_BLUEPRINT_CONTEXT_LABELS = {"concept": "已确认故事概念", "characters": "核心人物", "world": "世界设定", "timeline": "时间线与前史", "arc": "剧情弧与伏笔"}
+
+
+def build_blueprint_context(db: Session, story_id: str, *, max_chars: int = 6000) -> str:
+    """把已确认 Blueprint（概念 + characters/world/timeline/arc）序列化为紧凑上下文文本。
+
+    供章节计划 / 场景计划 / 节拍计划 / 正文生成等所有生成环节注入，确保模型基于
+    权威设定创作，杜绝自创与蓝图冲突的角色、组织与地名（设定不一致的根因）。
+    """
+    parts: list[str] = []
+    for kind in ("concept", "characters", "world", "timeline", "arc"):
+        artifact = latest_blueprint(db, story_id, kind)
+        payload = _json(artifact, None)
+        if not payload:
+            continue
+        text = json.dumps(payload, ensure_ascii=False)
+        parts.append(f"【{_BLUEPRINT_CONTEXT_LABELS.get(kind, kind)}】\n{text}")
+    joined = "\n\n".join(parts)
+    if max_chars and len(joined) > max_chars:
+        joined = joined[:max_chars] + "\n…（设定较长已截断，后续内容以蓝图为准）"
+    return joined
+
+
 def list_blueprint(db: Session, story_id: str) -> dict[str, dict[str, Any] | None]:
     get_story_or_404(db, story_id)
     return {kind: latest_blueprint(db, story_id, kind) for kind in (*BLUEPRINT_KINDS, "living_state")}

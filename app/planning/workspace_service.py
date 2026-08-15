@@ -26,7 +26,7 @@ from app.planning.workspace_schemas import (
     ScenePlanGenerationRequest,
     SceneUpdate,
 )
-from app.works.blueprint_service import latest_blueprint
+from app.works.blueprint_service import build_blueprint_context, latest_blueprint
 from app.works.concept_service import _model_for_config
 from app.works.models import GenerationTask
 from app.planning.service import get_chapter
@@ -438,9 +438,10 @@ def generate_scene_plan(db: Session, story_id: str, chapter_id: str, request: Sc
     try:
         adapter = build_adapters().get(spec.provider)
         if adapter and request.action == "generate_scene_plan":
+            blueprint_ctx = build_blueprint_context(db, story.id)
             messages = [
                 {"role": "system", "content": system_prompt("generate_scene_plan")},
-                {"role": "user", "content": f"根据章节计划生成场景计划。章节目标：{chapter.goal}。创意：{story.idea_text}"},
+                {"role": "user", "content": f"根据章节计划与故事蓝图生成场景计划（地点/时间/POV 必须与蓝图世界设定一致，人物沿用蓝图角色）。\n\n{blueprint_ctx}\n\n章节目标：{chapter.goal}。章节梗概：{chapter.summary}"},
             ]
             raw = adapter.complete(messages, temperature=config.temperature, reasoning_strength=config.reasoning_strength, json_mode=True, action="generate_scene_plan")
             payload = extract_json(raw)
@@ -479,9 +480,10 @@ def generate_beat_plan(db: Session, story_id: str, chapter_id: str, scene_id: st
         adapter = build_adapters().get(spec.provider)
         beats_data: list[dict[str, Any]]
         if adapter and request.action == "generate_beat_plan":
+            blueprint_ctx = build_blueprint_context(db, story.id)
             messages = [
                 {"role": "system", "content": system_prompt("generate_beat_plan")},
-                {"role": "user", "content": f"根据场景计划生成节拍计划。场景：{scene.title}。场景目标：{scene.character_goals}。冲突：{scene.conflict}"},
+                {"role": "user", "content": f"根据场景计划与故事蓝图生成节拍计划（人物与地点沿用蓝图设定）。\n\n{blueprint_ctx}\n\n场景：{scene.title}。场景目标：{scene.character_goals}。冲突：{scene.conflict}"},
             ]
             raw = adapter.complete(messages, temperature=config.temperature, reasoning_strength=config.reasoning_strength, json_mode=True, action="generate_beat_plan")
             payload = extract_json(raw)

@@ -12,6 +12,7 @@ from app.infrastructure.model_adapter import build_adapters, extract_json
 from app.infrastructure.prompts import prompt_version, system_prompt
 from app.planning.models import Chapter
 from app.planning.schemas import ChapterPlanGenerationRequest, ChapterPlanUpdate
+from app.works.blueprint_service import build_blueprint_context
 from app.works.concept_service import _model_for_config
 from app.works.models import GenerationTask
 from app.works.service import get_ai_config, get_story_or_404
@@ -98,9 +99,10 @@ def generate_chapter_plan(db: Session, story_id: str, request: ChapterPlanGenera
     task = GenerationTask(story_id=story.id, action="generate_chapter_plan", target_type="story", model_snapshot=json.dumps({"model": config.model, "temperature": config.temperature, "reasoning_strength": config.reasoning_strength}, ensure_ascii=False), prompt_version=prompt_version("generate_chapter_plan"), input_ref=json.dumps({"story_id": story.id, "blueprint": "confirmed"}, ensure_ascii=False), status="running")
     db.add(task)
     db.flush()
+    blueprint_ctx = build_blueprint_context(db, story.id)
     messages = [
         {"role": "system", "content": system_prompt("generate_chapter_plan")},
-        {"role": "user", "content": f"根据已确认的故事蓝图生成章节计划。故事创意：{story.idea_text}"},
+        {"role": "user", "content": f"根据已确认的故事蓝图与概念生成整部小说的章节计划。\n\n{blueprint_ctx}\n\n故事创意：{story.idea_text}"},
     ]
     try:
         adapter = build_adapters().get(spec.provider)

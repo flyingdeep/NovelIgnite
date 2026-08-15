@@ -135,9 +135,13 @@ def _build_generation_messages(db: Session, chapter: Chapter, scene: Scene, beat
         if earlier.summary:
             summaries.append(f"Scene {earlier.ordinal}「{earlier.title or ''}」：{earlier.summary}")
     prior_scenes_block = ("\n".join(summaries) + "\n\n") if summaries else ""
+    # 权威蓝图（设定与人物不得违背），避免正文与蓝图脱节
+    from app.works.blueprint_service import build_blueprint_context
+
+    blueprint_ctx = build_blueprint_context(db, chapter.story_id, max_chars=4000)
     return [
         {"role": "system", "content": system_prompt("generate_scene")},
-        {"role": "user", "content": f"章节目标：{chapter.goal or ''}\n章节梗概：{chapter.summary or ''}\n当前场景：{scene.title or ''}（地点：{scene.location or ''} · 时间：{scene.time or ''} · POV：{scene.pov or ''}）\n场景目标：{scene.character_goals or ''}，冲突：{scene.conflict or ''}，关键事件：{scene.key_events or ''}，场景结果：{scene.scene_result or ''}\n当前节拍：{beat.name or ''}\n节拍指令：{beat.instruction or ''}\n\n故事快照（仅本章开始前已成立的事实）：{json.dumps(snapshot_state, ensure_ascii=False)[:2000]}\n\n前序已发生场景摘要（保持剧情连贯）：\n{prior_scenes_block}前序正文（若存在）：\n{prior_prose[:3000]}"},
+        {"role": "user", "content": f"章节目标：{chapter.goal or ''}\n章节梗概：{chapter.summary or ''}\n当前场景：{scene.title or ''}（地点：{scene.location or ''} · 时间：{scene.time or ''} · POV：{scene.pov or ''}）\n场景目标：{scene.character_goals or ''}，冲突：{scene.conflict or ''}，关键事件：{scene.key_events or ''}，场景结果：{scene.scene_result or ''}\n当前节拍：{beat.name or ''}\n节拍指令：{beat.instruction or ''}\n\n权威故事蓝图（人物、地名、组织、世界规则必须严格遵守，不得自行更改或新增冲突设定）：\n{blueprint_ctx}\n\n故事快照（仅本章开始前已成立的事实）：{json.dumps(snapshot_state, ensure_ascii=False)[:4000]}\n\n前序已发生场景摘要（保持剧情连贯）：\n{prior_scenes_block}前序正文（若存在）：\n{prior_prose[:3000]}"},
     ]
 
 
