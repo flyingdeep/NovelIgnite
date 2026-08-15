@@ -499,7 +499,7 @@ def test_prose_messages_include_beat_three_elements(client, monkeypatch):
 
 
 def test_scene_review_produces_blueprint_update_suggestion(client, monkeypatch):
-    """Scene 完成后的独立 review 环节产出蓝图更新建议（API 可查询）。"""
+    """Scene 完成后的独立 review 环节产出蓝图更新建议并**自动应用**到对应分类。"""
     review_json = json.dumps([{
         "action": "add", "kind": "characters", "target": "神秘委托人",
         "change": "新增线索角色，推动后续调查", "evidence": "正文出现匿名委托人",
@@ -517,8 +517,18 @@ def test_scene_review_produces_blueprint_update_suggestion(client, monkeypatch):
     scene = scenes[0]
     client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/generations", json={"action": "generate_scene"})
     reviews = client.get(f"/api/v1/stories/{story_id}/blueprint-reviews").json()
-    assert reviews, "场景完成后应产生蓝图更新建议"
+    assert reviews, "场景完成后应产生蓝图更新记录"
+    assert reviews[0]["status"] == "applied", "review 建议应已自动应用而非待确认"
     assert reviews[0]["scope"] == "scene"
     assert reviews[0]["suggestions"][0]["kind"] == "characters"
     assert reviews[0]["suggestions"][0]["evidence"]
+    # 自动应用：建议已反映到 characters baseline（新版本 + 新条目 + 履历记录）。
+    chars = client.get(f"/api/v1/stories/{story_id}/blueprint/characters").json()
+    names = [e["name"] for e in chars["payload"]["entries"]]
+    assert "神秘委托人" in names, "蓝图更新建议应自动应用进 characters"
+    assert chars["payload"]["_ai_updates"], "应记录 AI 自动应用履历"
+    assert chars["version"] >= 2
+    # 更新履历端点可查到该分类版本历史。
+    history = client.get(f"/api/v1/stories/{story_id}/blueprint/characters/history").json()
+    assert [h["version"] for h in history] == [chars["version"], 1]
 

@@ -174,10 +174,18 @@ def get_blueprint(story_id: str, db: Session = Depends(get_db)):
 
 @router.get("/stories/{story_id}/blueprint-reviews")
 def get_blueprint_reviews(story_id: str, db: Session = Depends(get_db)):
-    """场景/章节完成后产生的蓝图更新建议（待作者确认）。"""
+    """场景/章节完成后产生的蓝图更新记录（已自动应用，作审计与摘要展示）。"""
     from app.works.blueprint_service import list_blueprint_reviews
 
     return list_blueprint_reviews(db, story_id)
+
+
+@router.get("/stories/{story_id}/blueprint/{kind}/history")
+def get_blueprint_kind_history(story_id: str, kind: str, db: Session = Depends(get_db)):
+    """某分类（characters/world/timeline/arc）的全部版本，供「更新履历」追溯。"""
+    from app.works.blueprint_service import list_blueprint_kind_history
+
+    return [artifact_response(artifact) for artifact in list_blueprint_kind_history(db, story_id, kind)]
 
 
 @router.get("/stories/{story_id}/living-state/history")

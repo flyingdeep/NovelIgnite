@@ -572,7 +572,17 @@ const BLUEPRINT_FIELD_KEYWORDS = ["性格特质", "性格", "职业身份", "职
 // 后端或模型可能把 fields 输出成对象 / 二维数组 / 字符串；统一归一化为 [label, value] 列表，
 // 避免 Object.entries(字符串) 把字段逐字拆散成「0性 1格 2冷…」矩阵。
 function normalizeUiFields(fields) {
-  const fmt = (v) => (Array.isArray(v) ? v.join("；") : String(v == null ? "" : v));
+  // 格式化字段值：数组/对象数组（如 living timeline 的 events）也要转成可读文本，
+  // 否则直接 join 会输出一长串 [object Object]。
+  const fmt = (v) => {
+    if (Array.isArray(v)) {
+      return v.map((x) => (typeof x === "object" && x !== null ? Object.entries(x).map(([k, val]) => `${k}：${val}`).join("，") : String(x))).join("；");
+    }
+    if (v && typeof v === "object") {
+      return Object.entries(v).map(([k, val]) => `${k}：${val}`).join("；");
+    }
+    return String(v == null ? "" : v);
+  };
   if (Array.isArray(fields)) {
     return fields.map((f) => {
       if (Array.isArray(f) && f.length >= 2) return [fmt(f[0]), fmt(f[1])];
@@ -711,8 +721,10 @@ async function loadBlueprintForCurrentStory() {
 }
 
 function renderBlueprintReviews(reviews) {
-  const pending = (reviews || []).filter((r) => r.status === "candidate");
-  const total = pending.reduce((n, r) => n + (r.suggestions || []).length, 0);
+  // 蓝图更新活动已自动应用到各分类（append-only 新版本 + 履历），此处只作轻量摘要提示，
+  // 不再是「待确认」长列表；点击各分类「查看更新履历」可看每次变更。
+  const applied = (reviews || []).filter((r) => r.status === "applied");
+  const total = applied.reduce((n, r) => n + (r.suggestions || []).length, 0);
   let el = document.querySelector("#blueprint-reviews-banner");
   if (!total) {
     if (el) el.remove();
@@ -727,13 +739,13 @@ function renderBlueprintReviews(reviews) {
       layout.parentElement.insertBefore(el, layout);
     }
   }
-  const rows = pending.flatMap((r) => (r.suggestions || []).map((s) => {
+  const latest = applied[applied.length - 1];
+  const recent = (latest && latest.suggestions || []).slice(0, 3).map((s) => {
     const act = s.action === "add" ? "新增" : "修改";
     const kindLabel = { characters: "人物", world: "世界", timeline: "时间线", arc: "剧情弧" }[s.kind] || s.kind;
-    const conf = { high: "高", medium: "中", low: "低" }[s.confidence] || s.confidence;
-    return `<li><b>${act}·${kindLabel}</b>「${s.target || ""}」：${s.change || ""} <small>依据：${s.evidence || ""} · 置信 ${conf}</small></li>`;
-  })).join("");
-  el.innerHTML = `<div style="margin:12px 0;padding:10px 12px;border:1px solid #e5b65a;border-radius:10px;background:rgba(229,182,90,.08)"><b style="color:#e5b65a">⚑ 蓝图更新建议（${total} 条待确认）</b><p style="margin:4px 0 0;font-size:12px;color:#9aa4b5">场景/章节完成后的独立 review 环节提出，需作者确认后才更新全局设定。</p><ul style="margin:8px 0 0;padding-left:18px;font-size:13px;line-height:1.7">${rows}</ul></div>`;
+    return `<li><b>${act}·${kindLabel}</b>「${s.target || ""}」：${s.change || ""}</li>`;
+  }).join("");
+  el.innerHTML = `<div style="margin:12px 0;padding:10px 12px;border:1px solid #3fae6a;border-radius:10px;background:rgba(63,174,106,.08)"><b style="color:#3fae6a">✓ 蓝图更新已自动应用（累计 ${total} 条）</b><p style="margin:4px 0 0;font-size:12px;color:#9aa4b5">场景/章节完成后的 review 已自动更新对应分类设定（新版本保留、锁定字段不覆盖），可在各分类「查看更新履历」中追溯。</p>${recent ? `<ul style="margin:8px 0 0;padding-left:18px;font-size:13px;line-height:1.7">${recent}</ul>` : ""}</div>`;
 }
 
 async function saveConceptCandidate() {
@@ -961,22 +973,48 @@ async function openHistory(kind, index) {
   document.querySelector("#history-title").textContent = `更新履历 · ${entry.name}`;
   document.querySelector("#history-subtitle").textContent = `${blueprintData[kind].title} · 当前为最新版本 v${entry.version}`;
   let history = entry.history || [];
-  if (kind === "living" && apiAvailable && currentBook()) {
+  if (apiAvailable && currentBook()) {
     try {
-      const versions = await apiRequest(`/stories/${currentBook().id}/living-state/history`);
-      if (Array.isArray(versions) && versions.length) {
-        history = versions.map((v) => {
-          const confirmed = (v.payload && v.payload.confirmed_deltas) || [];
-          const domains = (v.payload && v.payload.domains) || {};
-          const cCount = (domains.characters?.state?.entries || []).length;
-          const wCount = (domains.world?.state?.entries || []).length;
-          const tCount = (domains.timeline?.state?.entries || []).length;
-          const ch = v.version === 1 ? "初始投影（蓝图确认）" : `第 ${v.payload?.last_confirmed_chapter ?? "?"} 章 Delta 确认`;
-          const detail = v.version === 1
-            ? `Living State v${v.version}：由已确认 Blueprint 投影初始世界状态（角色 ${cCount} / 世界 ${wCount} / 时间线 ${tCount} 条）。`
-            : `本章确认后投影：已确认 Delta ${confirmed.length} 条（角色 ${cCount} / 世界 ${wCount} / 时间线 ${tCount} 条）。`;
-          return { version: `v${v.version}`, date: (v.updated_at || "").slice(0, 10) || "刚刚", by: "系统投影", note: ch, detail };
-        });
+      if (kind === "living") {
+        const versions = await apiRequest(`/stories/${currentBook().id}/living-state/history`);
+        if (Array.isArray(versions) && versions.length) {
+          history = versions.map((v) => {
+            const confirmed = (v.payload && v.payload.confirmed_deltas) || [];
+            const domains = (v.payload && v.payload.domains) || {};
+            const cCount = (domains.characters?.state?.entries || []).length;
+            const wCount = (domains.world?.state?.entries || []).length;
+            const tCount = (domains.timeline?.state?.entries || []).length;
+            const ch = v.version === 1 ? "初始投影（蓝图确认）" : `第 ${v.payload?.last_confirmed_chapter ?? "?"} 章 Delta 确认`;
+            const detail = v.version === 1
+              ? `Living State v${v.version}：由已确认 Blueprint 投影初始世界状态（角色 ${cCount} / 世界 ${wCount} / 时间线 ${tCount} 条）。`
+              : `本章确认后投影：已确认 Delta ${confirmed.length} 条（角色 ${cCount} / 世界 ${wCount} / 时间线 ${tCount} 条）。`;
+            return { version: `v${v.version}`, date: (v.updated_at || "").slice(0, 10) || "刚刚", by: "系统投影", note: ch, detail };
+          });
+        }
+      } else if (["characters", "world", "timeline", "arc"].includes(kind)) {
+        // 蓝图分类的更新履历：从后端加载该分类全部版本（含 AI 自动应用记录）。
+        const versions = await apiRequest(`/stories/${currentBook().id}/blueprint/${kind}/history`);
+        if (Array.isArray(versions) && versions.length) {
+          history = versions.map((v) => {
+            const payload = v.payload || {};
+            const aiUpdates = payload._ai_updates || [];
+            const entryCount = (payload.entries || []).length;
+            let note, detail;
+            if (v.version === 1) {
+              note = "初始生成";
+              detail = `${blueprintData[kind].title} v${v.version}：初始候选（${entryCount} 条）。`;
+            } else if (aiUpdates.length) {
+              const last = aiUpdates[aiUpdates.length - 1];
+              const total = aiUpdates.reduce((n, u) => n + (u.count || 0), 0);
+              note = `第 ${last.chapter_ordinal ?? "?"} 章 · AI 自动应用 ${last.count || 0} 条`;
+              detail = `本版本累计更新 ${total} 条：${(last.items || []).map((i) => `${i.action === "add" ? "新增" : "修改"}「${i.target}」`).join("、")}。`;
+            } else {
+              note = v.status === "confirmed" ? "作者确认" : "重新生成候选";
+              detail = `${blueprintData[kind].title} v${v.version}：${entryCount} 条。`;
+            }
+            return { version: `v${v.version}`, date: (v.updated_at || "").slice(0, 10) || "刚刚", by: v.status === "confirmed" ? "作者/系统" : "AI", note, detail };
+          });
+        }
       }
     } catch (error) {
       // History endpoint unavailable: keep the current single entry.

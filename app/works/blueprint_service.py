@@ -48,6 +48,9 @@ def build_blueprint_context(db: Session, story_id: str, *, max_chars: int = 6000
         payload = _json(artifact, None)
         if not payload:
             continue
+        # 排除内部元数据（如 AI 自动应用的 _ai_updates），不进入模型上下文。
+        if isinstance(payload, dict):
+            payload = {k: v for k, v in payload.items() if k != "_ai_updates"}
         text = json.dumps(payload, ensure_ascii=False)
         parts.append(f"【{_BLUEPRINT_CONTEXT_LABELS.get(kind, kind)}】\n{text}")
     joined = "\n\n".join(parts)
@@ -74,6 +77,14 @@ def list_living_state_history(db: Session, story_id: str) -> list[StoryArtifact]
     """All Living State versions, newest first (for the version-history modal)."""
     get_story_or_404(db, story_id)
     return list(db.scalars(select(StoryArtifact).where(StoryArtifact.story_id == story_id, StoryArtifact.kind == "living_state").order_by(StoryArtifact.version.desc())))
+
+
+def list_blueprint_kind_history(db: Session, story_id: str, kind: str) -> list[StoryArtifact]:
+    """某分类（characters/world/timeline/arc）的全部版本，新旧排序，供「更新履历」追溯。"""
+    get_story_or_404(db, story_id)
+    if kind not in BLUEPRINT_KINDS:
+        raise HTTPException(status_code=422, detail=f"Unknown blueprint kind: {kind}")
+    return list(db.scalars(select(StoryArtifact).where(StoryArtifact.story_id == story_id, StoryArtifact.kind == kind).order_by(StoryArtifact.version.desc())))
 
 
 def list_blueprint_reviews(db: Session, story_id: str) -> list[dict[str, Any]]:

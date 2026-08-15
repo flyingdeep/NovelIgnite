@@ -10,6 +10,7 @@ Provides:
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
@@ -22,7 +23,7 @@ from app.infrastructure.prompts import prompt_version, system_prompt
 from app.planning.models import Beat, Chapter, ChapterEvent, ConsistencyIssue, ProseVersion, Scene, StateDelta, StateSnapshot
 from app.planning.workspace_schemas import ProseVersionCreate, ScenePlanGenerationRequest
 from app.planning.workspace_service import _require_active_chapter, get_beat, get_scene
-from app.works.blueprint_service import build_blueprint_context
+from app.works.blueprint_service import BLUEPRINT_KINDS, build_blueprint_context, latest_blueprint
 from app.works.concept_service import _model_for_config
 from app.works.models import GenerationTask, StoryArtifact
 from app.works.service import get_ai_config
@@ -317,13 +318,87 @@ def _complete_scene_if_done(db: Session, scene: Scene, config=None) -> bool:
     return False
 
 
+def auto_apply_blueprint_updates(db: Session, story_id: str, suggestions: list[dict[str, Any]], *, chapter_ordinal: int | None = None, scope: str = "") -> dict[str, int]:
+    """把 review 建议自动应用到对应 kind 的 baseline 蓝图（append-only，供「更新履历」追溯）。
+
+    设计：用户要求蓝图更新活动自动触发并反映到各分类说明与更新履历，不再需要
+    「待确认」长列表。为保留安全与可追溯性，自动应用遵循：
+    - 跳过作者锁定（locked_paths 含 kind 或目标条目名）的建议；
+    - 同一 kind 若最新版本已是「AI 自动应用」产物（payload 含 _ai_updates 标记）则就地合并，
+      避免每个 Beat/Scene 都发新版本导致版本爆炸；否则创建 version+1 新版本（原版本保留）；
+    - 每次应用追加到 payload["_ai_updates"] 供前端「更新履历」展示；该元数据键不会进入模型上下文。
+    返回 {kind: 应用条数}。
+    """
+    import copy
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for s in suggestions:
+        if not isinstance(s, dict):
+            continue
+        kind = str(s.get("kind") or "")
+        if kind not in BLUEPRINT_KINDS:
+            continue
+        if s.get("action") not in ("add", "modify") or not str(s.get("target") or "").strip():
+            continue
+        grouped.setdefault(kind, []).append(s)
+
+    applied: dict[str, int] = {}
+    for kind, items in grouped.items():
+        artifact = latest_blueprint(db, story_id, kind)
+        if artifact is None:
+            continue
+        locked = set(json.loads(artifact.locked_paths) or [])
+        payload = copy.deepcopy(json.loads(artifact.payload))
+        entries = payload.setdefault("entries", [])
+        count = 0
+        for s in items:
+            target = str(s.get("target") or "").strip()
+            change = str(s.get("change") or "").strip() or target
+            evidence = str(s.get("evidence") or "").strip()
+            if kind in locked or target in locked:
+                continue
+            entry = next((e for e in entries if isinstance(e, dict) and e.get("name") == target), None)
+            if entry is None:
+                entry = {"name": target, "role": "AI 自动更新", "fields": {}}
+                entries.append(entry)
+            entry["fields"]["AI 自动更新"] = change
+            if evidence:
+                entry["fields"]["证据"] = evidence
+            count += 1
+        if not count:
+            continue
+        had_ai_updates = "_ai_updates" in payload
+        updates = payload.setdefault("_ai_updates", [])
+        updates.append({
+            "time": datetime.now(timezone.utc).isoformat(),
+            "scope": scope,
+            "chapter_ordinal": chapter_ordinal,
+            "count": count,
+            "items": [{"action": s.get("action"), "kind": kind, "target": str(s.get("target") or "")} for s in items],
+        })
+        if had_ai_updates:
+            artifact.payload = json.dumps(payload, ensure_ascii=False)
+        else:
+            db.add(StoryArtifact(
+                story_id=story_id,
+                kind=kind,
+                layer="baseline",
+                payload=json.dumps(payload, ensure_ascii=False),
+                status=artifact.status,
+                version=artifact.version + 1,
+                locked_paths=artifact.locked_paths,
+                source_task_id=artifact.source_task_id,
+            ))
+        applied[kind] = count
+    return applied
+
+
 def review_blueprint_updates(db: Session, story_id: str, chapter: Chapter, scene: Scene | None, beat: Beat | None, config, *, scope: str) -> list[dict[str, Any]]:
     """产出后的蓝图更新 review：判断新产出是否引入需要更新 baseline 蓝图的新设定。
 
-    scope: beat | scene | chapter。beat 级不单独调模型（由 scene 级 review 覆盖其增量，
-    且每个 beat 已跑一致性检查）；scene/chapter 级调模型产出建议，存为
-    StoryArtifact(kind="blueprint_review", status="candidate")，由作者确认后才更新 baseline。
-    失败静默，绝不阻塞写作流程。
+    scope: beat | scene | chapter。scene/chapter 级调模型产出建议，**自动应用**到对应
+    分类 baseline（append-only 新版本 + 锁定字段保护 + 履历记录），并保留一条
+    StoryArtifact(kind="blueprint_review", status="applied") 作审计。失败静默，绝不阻塞写作流程。
     """
     if scope not in ("beat", "scene", "chapter"):
         return []
@@ -366,11 +441,12 @@ def review_blueprint_updates(db: Session, story_id: str, chapter: Chapter, scene
                 kind="blueprint_review",
                 layer="living",
                 payload=json.dumps({"scope": scope, "chapter_ordinal": chapter.ordinal, "scene_id": scene.id if scene else None, "beat_id": beat.id if beat else None, "suggestions": suggestions}, ensure_ascii=False),
-                status="candidate",
+                status="applied",
                 version=(previous.version + 1 if previous else 1),
                 source_task_id=None,
             ))
             db.flush()
+            auto_apply_blueprint_updates(db, story_id, suggestions, chapter_ordinal=chapter.ordinal, scope=scope)
         return suggestions
     except Exception:
         return []
