@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.infrastructure.model_adapter import build_adapters, configured_model_specs, extract_json
+from app.infrastructure.model_prompt_profiles import compose_system_prompt
 from app.infrastructure.prompts import prompt_version, system_prompt
 from app.works.blueprint_schemas import BlueprintConfirm, BlueprintGenerationRequest, BlueprintUpdate
 from app.works.concept_service import _model_for_config
@@ -133,7 +134,7 @@ def generate_blueprint(db: Session, story_id: str, request: BlueprintGenerationR
     db.add(task)
     db.flush()
     messages = [
-        {"role": "system", "content": system_prompt("generate_blueprint")},
+        {"role": "system", "content": compose_system_prompt(db, spec.provider, "generate_blueprint")},
         {"role": "user", "content": f"根据已确认故事概念与作者创意生成全局 Blueprint。{_blueprint_scale_for_length(str(concept_payload.get('length') or ''))}只生成稳定 Baseline，不生成章节状态。Concept：{json.dumps(concept_payload, ensure_ascii=False)} Idea：{story.idea_text}"},
     ]
     try:

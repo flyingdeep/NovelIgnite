@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.infrastructure.model_adapter import build_adapters, extract_json
+from app.infrastructure.model_prompt_profiles import compose_system_prompt
 from app.infrastructure.prompts import prompt_version, system_prompt
 from app.planning.models import Beat, Chapter, ChapterEvent, Scene, StateSnapshot
 from app.planning.workspace_schemas import (
@@ -440,7 +441,7 @@ def generate_scene_plan(db: Session, story_id: str, chapter_id: str, request: Sc
         if adapter and request.action == "generate_scene_plan":
             blueprint_ctx = build_blueprint_context(db, story.id)
             messages = [
-                {"role": "system", "content": system_prompt("generate_scene_plan")},
+                {"role": "system", "content": compose_system_prompt(db, spec.provider, "generate_scene_plan")},
                 {"role": "user", "content": f"根据章节计划与故事蓝图生成场景计划（地点/时间/POV 必须与蓝图世界设定一致，人物沿用蓝图角色）。\n\n{blueprint_ctx}\n\n章节目标：{chapter.goal}。章节梗概：{chapter.summary}"},
             ]
             raw = adapter.complete(messages, temperature=config.temperature, reasoning_strength=config.reasoning_strength, json_mode=True, action="generate_scene_plan")
@@ -482,7 +483,7 @@ def generate_beat_plan(db: Session, story_id: str, chapter_id: str, scene_id: st
         if adapter and request.action == "generate_beat_plan":
             blueprint_ctx = build_blueprint_context(db, story.id)
             messages = [
-                {"role": "system", "content": system_prompt("generate_beat_plan")},
+                {"role": "system", "content": compose_system_prompt(db, spec.provider, "generate_beat_plan")},
                 {"role": "user", "content": f"根据场景计划与故事蓝图生成节拍计划（人物与地点沿用蓝图设定）。\n\n{blueprint_ctx}\n\n场景：{scene.title}。场景目标：{scene.character_goals}。冲突：{scene.conflict}"},
             ]
             raw = adapter.complete(messages, temperature=config.temperature, reasoning_strength=config.reasoning_strength, json_mode=True, action="generate_beat_plan")

@@ -63,3 +63,15 @@ class ModelAvailabilityResponse(BaseModel):
     available: bool
     reason: str = ""
     latency_ms: float = 0
+
+
+class ModelPromptProfileResponse(BaseModel):
+    provider: str
+    system_prompt: str
+    version: int
+    updated_at: datetime | None = None
+
+
+class ModelPromptProfileUpdate(BaseModel):
+    system_prompt: str = Field(max_length=12000)
+    expected_version: int = Field(ge=0)

@@ -17,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.infrastructure.model_adapter import build_adapters, extract_json
+from app.infrastructure.model_prompt_profiles import compose_system_prompt
 from app.infrastructure.prompts import prompt_version, system_prompt
 from app.planning.models import Beat, Chapter, ChapterEvent, ConsistencyIssue, ProseVersion, Scene, StateDelta, StateSnapshot
 from app.planning.workspace_schemas import ProseVersionCreate, ScenePlanGenerationRequest
@@ -171,11 +172,12 @@ def _build_generation_messages(db: Session, chapter: Chapter, scene: Scene, beat
     prev_scene_summary = summaries[-1] if summaries else ""
     # 权威蓝图（概念 + 人物/世界/时间线/剧情弧）：任何写作的基石，全量注入
     blueprint_ctx = build_blueprint_context(db, chapter.story_id, max_chars=16000)
+    model_provider = _model_for_config(get_ai_config(db, chapter.story_id).model).provider
     # Beat 三要素：上一个 Beat 完整正文、上一个 Scene 摘要、全书进展摘要
     prev_beat_prose = _latest_prev_beat_prose(db, scene, beat)
     story_progress = build_story_progress_summary(db, chapter.story_id)
     return [
-        {"role": "system", "content": system_prompt("generate_scene")},
+        {"role": "system", "content": compose_system_prompt(db, model_provider, "generate_scene")},
         {"role": "user", "content": (
             f"章节目标：{chapter.goal or ''}\n"
             f"章节梗概：{chapter.summary or ''}\n"
@@ -245,6 +247,9 @@ def _generate_beat(db: Session, story_id: str, chapter: Chapter, scene: Scene, b
         # Checkpoint: proposed delta + consistency check on the generated prose.
         create_beat_delta(db, story_id, chapter, scene, beat, pv, config)
         run_consistency_check(db, story_id, chapter, scene, beat, pv, checkpoint="beat", config=config)
+        # 独立 review 检查点：每个 Beat 都判断是否出现需要纳入全局蓝图的新设定。
+        # 建议仍为 candidate，只有作者显式确认后才能改变 baseline。
+        review_blueprint_updates(db, story_id, chapter, scene, beat, config, scope="beat")
         db.commit()
         db.refresh(pv)
         return pv
@@ -274,7 +279,7 @@ def _ai_scene_summary(db: Session, scene: Scene, config) -> str:
     if adapter is None:
         return joined[:300]
     messages = [
-        {"role": "system", "content": system_prompt("scene_summary")},
+        {"role": "system", "content": compose_system_prompt(db, _model_for_config(config.model).provider, "scene_summary")},
         {"role": "user", "content": f"场景：{scene.title or ''}（地点：{scene.location or ''} · 时间：{scene.time or ''} · POV：{scene.pov or ''}）\n场景目标：{scene.character_goals or ''}，结果：{scene.scene_result or ''}\n\n正文：\n{joined[:4000]}"},
     ]
     try:
@@ -346,7 +351,7 @@ def review_blueprint_updates(db: Session, story_id: str, chapter: Chapter, scene
         return []
     blueprint_ctx = build_blueprint_context(db, story_id, max_chars=6000)
     messages = [
-        {"role": "system", "content": system_prompt("review_blueprint_updates")},
+        {"role": "system", "content": compose_system_prompt(db, _model_for_config(config.model).provider, "review_blueprint_updates")},
         {"role": "user", "content": f"review 范围：{scope}（第{chapter.ordinal}章）\n\n当前权威蓝图：\n{blueprint_ctx}\n\n本单元已应用正文：\n{prose_text}"},
     ]
     try:
@@ -499,7 +504,7 @@ def _ai_extract_changes(db: Session, chapter: Chapter, scene: Scene, beat: Beat,
     if adapter is None:
         return None
     messages = [
-        {"role": "system", "content": system_prompt("extract_delta")},
+        {"role": "system", "content": compose_system_prompt(db, _model_for_config(config.model).provider, "extract_delta")},
         {"role": "user", "content": f"章节开始快照：{json.dumps(snapshot_state, ensure_ascii=False)[:2500]}\n\n场景：{scene.title or ''}\n节拍：{beat.name or f'Beat {beat.ordinal}'}\n\n正文：\n{markdown[:4000]}"},
     ]
     try:
@@ -568,7 +573,7 @@ def _ai_consistency_check(db: Session, chapter: Chapter, scene: Scene, beat: Bea
     if adapter is None:
         return []
     messages = [
-        {"role": "system", "content": system_prompt("consistency_check")},
+        {"role": "system", "content": compose_system_prompt(db, _model_for_config(config.model).provider, "consistency_check")},
         {"role": "user", "content": f"章节开始快照：{json.dumps(snapshot_state, ensure_ascii=False)[:2500]}\n\n场景：{scene.title or ''}\n节拍：{beat.name or f'Beat {beat.ordinal}'}\n\n正文：\n{markdown[:4000]}"},
     ]
     try:

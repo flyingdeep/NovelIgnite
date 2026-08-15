@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.infrastructure.model_adapter import build_adapters, extract_json
+from app.infrastructure.model_prompt_profiles import compose_system_prompt
 from app.infrastructure.prompts import prompt_version, system_prompt
 from app.planning.models import Chapter
 from app.planning.schemas import ChapterPlanGenerationRequest, ChapterPlanUpdate
@@ -101,7 +102,7 @@ def generate_chapter_plan(db: Session, story_id: str, request: ChapterPlanGenera
     db.flush()
     blueprint_ctx = build_blueprint_context(db, story.id)
     messages = [
-        {"role": "system", "content": system_prompt("generate_chapter_plan")},
+        {"role": "system", "content": compose_system_prompt(db, spec.provider, "generate_chapter_plan")},
         {"role": "user", "content": f"根据已确认的故事蓝图与概念生成整部小说的章节计划。\n\n{blueprint_ctx}\n\n故事创意：{story.idea_text}"},
     ]
     try:

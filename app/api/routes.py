@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.infrastructure.database import get_db
 from app.infrastructure.config import settings
 from app.infrastructure.model_adapter import configured_model_specs
-from app.works.schemas import AIConfigResponse, AIConfigUpdate, IdeaUpdate, ModelAvailabilityResponse, ModelResponse, TitleUpdate, WorkCreate, WorkResponse
+from app.works.schemas import AIConfigResponse, AIConfigUpdate, IdeaUpdate, ModelAvailabilityResponse, ModelPromptProfileResponse, ModelPromptProfileUpdate, ModelResponse, TitleUpdate, WorkCreate, WorkResponse
 from app.works.service import create_story, get_ai_config, get_story_or_404, list_stories, soft_delete_story, update_ai_config, update_idea, update_title
 from app.works.concept_schemas import ConceptConfirm, ConceptGenerationRequest, ConceptUpdate
 from app.works.concept_service import confirm_concept, concept_response, generate_concept, latest_concept, update_concept
@@ -119,6 +119,26 @@ def get_models_availability():
     from app.infrastructure.model_adapter import check_model_availability
 
     return [ModelAvailabilityResponse(**check_model_availability(s)) for s in configured_model_specs()]
+
+
+@router.get("/models/prompt-profiles", response_model=list[ModelPromptProfileResponse])
+def get_model_prompt_profiles(db: Session = Depends(get_db)):
+    """持久化的每模型预设系统提示词；不返回任何密钥。"""
+    from app.infrastructure.model_prompt_profiles import list_model_prompt_profiles
+
+    return list_model_prompt_profiles(db, [spec.provider for spec in configured_model_specs()])
+
+
+@router.put("/models/{provider}/prompt-profile", response_model=ModelPromptProfileResponse)
+def put_model_prompt_profile(provider: str, payload: ModelPromptProfileUpdate, db: Session = Depends(get_db)):
+    from app.infrastructure.model_prompt_profiles import update_model_prompt_profile
+
+    if provider not in {spec.provider for spec in configured_model_specs()}:
+        raise HTTPException(status_code=404, detail="Model provider not found")
+    try:
+        return update_model_prompt_profile(db, provider, payload.system_prompt, payload.expected_version)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/stories/{story_id}/concept")

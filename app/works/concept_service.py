@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.infrastructure.model_adapter import ModelSpec, build_adapters
+from app.infrastructure.model_prompt_profiles import compose_system_prompt
 from app.infrastructure.prompts import prompt_version, system_prompt
 from app.works.concept_schemas import ConceptConfirm, ConceptGenerationRequest, ConceptUpdate
 from app.works.models import GenerationTask, StoryArtifact
@@ -104,7 +105,7 @@ def generate_concept(db: Session, story_id: str, request: ConceptGenerationReque
     db.add(task)
     db.flush()
     messages = [
-        {"role": "system", "content": system_prompt("generate_concept")},
+        {"role": "system", "content": compose_system_prompt(db, spec.provider, "generate_concept")},
         {"role": "user", "content": f"请根据作者创意生成 Story Concept 候选。保留作者意图，不要把未确认内容当事实。作者创意：{story.idea_text}"},
     ]
     try:
@@ -200,7 +201,7 @@ def _generate_title_if_unnamed(db: Session, story) -> None:
         concept = latest_concept(db, story.id)
         payload = _payload(concept) if concept else {}
         messages = [
-            {"role": "system", "content": system_prompt("generate_title")},
+            {"role": "system", "content": compose_system_prompt(db, spec.provider, "generate_title")},
             {"role": "user", "content": (
                 f"题材：{payload.get('genre', '')}\n"
                 f"风格：{payload.get('style', '')}\n"

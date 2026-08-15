@@ -268,6 +268,42 @@ def test_complete_does_not_retry_bad_request(monkeypatch):
     assert calls["n"] == 1
 
 
+def test_model_prompt_profile_persists_and_stacks_with_task_prompt(client):
+    """模型预设提示词落库，并与任务提示词叠加而非覆盖。"""
+    provider = "deepseek"
+    listed = client.get("/api/v1/models/prompt-profiles")
+    assert listed.status_code == 200
+    initial = next(item for item in listed.json() if item["provider"] == provider)
+    assert initial["version"] == 0
+
+    saved = client.put(f"/api/v1/models/{provider}/prompt-profile", json={
+        "system_prompt": "请使用大众易懂、通顺的中文表达，保持自然过渡。",
+        "expected_version": 0,
+    })
+    assert saved.status_code == 200
+    assert saved.json()["version"] == 1
+
+    # 重新读取仍在：真实服务重启后 SQLite 的同一记录也会保留。
+    again = client.get("/api/v1/models/prompt-profiles").json()
+    profile = next(item for item in again if item["provider"] == provider)
+    assert profile["system_prompt"].startswith("请使用大众易懂")
+    assert profile["version"] == 1
+
+    from app.infrastructure.database import get_db
+    from app.infrastructure.model_prompt_profiles import compose_system_prompt
+
+    # client 的 override session 中直接验证最终系统提示词含两个独立层。
+    db = next(iter(client.app.dependency_overrides[get_db]()))
+    try:
+        composed = compose_system_prompt(db, provider, "generate_scene")
+        assert "模型预设系统提示词" in composed
+        assert "大众易懂" in composed
+        assert "当前任务系统提示词" in composed
+        assert "当前节拍" in composed  # 任务提示词的任务边界仍然存在
+    finally:
+        db.close()
+
+
 def test_fake_adapter_is_deterministic_and_records_parameters():
     adapter = FakeModelAdapter('{"candidate": "ok"}')
     assert adapter.complete([], temperature=1.1, reasoning_strength="high", json_mode=True) == '{"candidate": "ok"}'

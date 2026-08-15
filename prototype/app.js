@@ -415,7 +415,7 @@ const API_BASE = "/api/v1";
 let apiAvailable = false;
 
 function canAccessScreen(screen) {
-  if (screen === "works") return true;
+  if (screen === "works" || screen === "models") return true;
   const book = currentBook();
   if (!book) return false;
   return (STAGE_SCREENS[book.stage] || []).includes(screen);
@@ -429,7 +429,11 @@ function updateStepbarLock() {
   const book = currentBook();
   document.querySelectorAll("[data-nav]").forEach((button) => {
     const nav = button.dataset.nav;
-    if (nav === "works") return;
+    if (nav === "works" || nav === "models") {
+      button.classList.remove("disabled");
+      button.setAttribute("aria-disabled", "false");
+      return;
+    }
     const locked = !book || !(STAGE_SCREENS[book.stage] || []).includes(nav);
     button.classList.toggle("disabled", locked);
     button.setAttribute("aria-disabled", String(locked));
@@ -1178,13 +1182,16 @@ function renderWorkspaceFromContext(context) {
   document.querySelector("#editor-status").textContent = scene.status === "available" ? "当前 Scene" : scene.status === "completed" ? "已完成" : "计划中";
   const beats = scene.beats || [];
   const beatsHtml = beats.map((b) => beatHtmlApi(b, readOnly)).join("");
-  const allBeatsDone = beats.length > 0 && beats.every((b) => b.status === "applied" || b.status === "completed");
+  // Chapter Delta 的完整性是章节级约束，不能只看当前选中的 Scene。
+  const chapterBeats = scenesData.flatMap((item) => item.beats || []);
+  const allBeatsDone = chapterBeats.length > 0 && chapterBeats.every((b) => b.status === "applied" || b.status === "completed");
+  const missingBeatCount = chapterBeats.filter((b) => b.status !== "applied" && b.status !== "completed").length;
   const actionBar = readOnly
     ? ""
     : `<button class="secondary-button generate-beat-plan" type="button" data-scene-id="${scene.id}">生成节拍计划 →</button> <button class="secondary-button generate-chapter-remaining" type="button">完成本章剩余 →</button>`;
   const deltaArea = (!readOnly && allBeatsDone)
     ? `<div class="scene-actions delta-confirm-area" style="margin-top:16px;padding:14px;border:1px solid var(--accent,#7c5cff);border-radius:10px"><b>Chapter Delta 就绪</b><p style="margin:6px 0">本章所有 Beat 已应用。确认 Chapter Delta 后将更新 Living State 并激活下一章。</p><button class="primary-button confirm-chapter-delta" type="button">确认 Chapter Delta →</button></div>`
-    : "";
+    : (!readOnly && missingBeatCount ? `<div class="scene-actions" style="margin-top:16px;padding:12px;border:1px solid rgba(229,182,90,.45);border-radius:10px"><b>Chapter Delta 尚未就绪</b><p style="margin:6px 0">本章仍有 ${missingBeatCount} 个 Beat 未完成。请完成全部 Scene 正文后再确认 Delta。</p></div>` : "");
   const sceneGenButton = readOnly ? "" : `<button class="primary-button scene-generate" type="button">生成整个 Scene 正文</button>`;
   document.querySelector("#scene-content").innerHTML = `<div class="scene-title-row"><h2 class="scene-title">Scene ${scene.ordinal} · ${scene.title}</h2>${sceneGenButton}<button class="config-button" type="button" data-config>⚙ 生成设置</button></div><p class="scene-subtitle">${subtitle}</p><div class="scene-overview"><b>Scene 描述</b><br>${scene.character_goals || ""}${scene.conflict ? `<br><b>冲突：</b>${scene.conflict}` : ""}${scene.key_events ? `<br><b>关键事件：</b>${scene.key_events}` : ""}${scene.scene_result ? `<br><b>场景结果：</b>${scene.scene_result}` : ""}${scene.summary ? `<br><b>场景摘要：</b>${scene.summary}` : ""}</div>${beatsHtml || `<div class="books-empty" style="grid-column:1/-1"><h3>该场景尚未规划 Beat</h3><p>点击下方「生成节拍计划」，为当前场景规划 Beat 顺序。</p></div>`}<div class="scene-actions" style="margin-top:12px">${actionBar}</div>${deltaArea}`;
   renderWorkspaceStatus(context);
@@ -1687,7 +1694,14 @@ function bindWorkspaceEvents() {
         showScreen("read");
         toast("🎉 全书已完成！进入阅读模式查看完整小说。");
       }
-    } catch (error) { toast("Delta 确认失败。"); }
+    } catch (error) {
+      const detail = error && error.message;
+      if (detail && detail.includes("Chapter 尚未全部完成")) {
+        toast(detail);
+      } else {
+        generationFailToast(error, "Delta 确认失败。");
+      }
+    }
     finally { hideThinking(); }
   }));
   // Phase 5: generate scene plan from API
@@ -2129,25 +2143,47 @@ function bindEvents() {
   });
 }
 
+let modelPromptProfiles = [];
+
+async function loadModelPromptProfiles() {
+  try {
+    modelPromptProfiles = await apiRequest("/models/prompt-profiles", { timeoutMs: 10000 });
+  } catch (error) {
+    modelPromptProfiles = [];
+  }
+  renderModels();
+}
+
 function renderModels() {
+  const availability = Object.fromEntries((modelAvailability || []).map((m) => [m.provider, m]));
   const models = [
-    ["DeepSeek V4 Flash", "OpenAI Chat Completions compatible · 适合快速结构化规划与正文生成", "https://api.deepseek.com", "运行正常 · 842ms"],
-    ["Agnes 2.5 Flash", "OpenAI Chat Completions compatible · 适合结构化候选与一致性检查", "https://apihub.agnes-ai.com", "运行正常 · 713ms"],
-    ["Grok 4.5", "OpenAI Chat Completions compatible · 用于高探索性候选；不要求结构化响应格式", "https://modelflare.dev", "尚未测试"],
-    ["Qwen3.6 Abliterated 27B (Ollama)", "远端 Ollama · OpenAI 兼容 · 推理默认开启（reasoning_effort），适合高探索性创作", "http://106.75.216.144:11434", "页面加载时异步探测 · 离线时自动禁用"]
+    ["deepseek", "DeepSeek V4 Flash", "适合快速结构化规划与正文生成", "https://api.deepseek.com"],
+    ["agnes", "Agnes 2.5 Flash", "适合结构化候选与一致性检查", "https://apihub.agnes-ai.com"],
+    ["grok", "Grok 4.5", "适合高探索性候选与复杂推理", "https://modelflare.dev"],
+    ["ollama", "Qwen3.6 Abliterated 27B (Ollama)", "远端 Ollama · 推理默认开启，适合高探索性创作", "http://106.75.216.144:11434"],
   ];
-  document.querySelector("#model-cards").innerHTML = models.map(([name, description, endpoint, status], index) => `<article class="model-card"><div><h3>${name} <span class="tag green">已启用</span></h3><p>${description}</p><small>${endpoint} · API Key: 服务端环境变量（Ollama 无鉴权）</small></div><div class="model-card-actions"><button class="secondary-button test-model" type="button" data-model="${name}" data-index="${index}">测试配置</button><button class="icon-button" type="button" aria-label="编辑 ${name}" data-toast="真实实现应编辑服务端模型配置，前端仅显示脱敏状态。">⚙</button></div><div class="test-result" data-result="${index}" ${index === 2 || index === 3 ? "hidden" : ""}>✓ ${status} · 返回结构化候选验证通过</div></article>`).join("");
-  document.querySelectorAll(".test-model").forEach((button) => button.addEventListener("click", () => {
+  const profiles = Object.fromEntries((modelPromptProfiles || []).map((p) => [p.provider, p]));
+  document.querySelector("#model-cards").innerHTML = models.map(([provider, name, description, endpoint]) => {
+    const profile = profiles[provider] || { system_prompt: "", version: 0 };
+    const state = availability[provider];
+    const online = !state || state.available;
+    const stateText = online ? "可用" : "离线 · 不可用";
+    return `<article class="model-card"><div><h3>${name} <span class="tag ${online ? "green" : "amber"}">${stateText}</span></h3><p>${description}</p><small>${endpoint} · API Key 仅由服务端持有</small></div><label class="form-field" style="margin-top:12px"><span>模型预设系统提示词 <small>与每项任务提示词叠加，不覆盖任务目标、格式与边界</small></span><textarea class="model-prompt-input" data-provider="${provider}" maxlength="12000" rows="5" placeholder="例如：使用大众易懂的中文；优先清晰因果与自然过渡；保持克制而具体的叙述。">${escapeHtml(profile.system_prompt || "")}</textarea></label><div class="model-card-actions"><span class="tag">预设 v${profile.version || 0}</span><button class="secondary-button save-model-prompt" type="button" data-provider="${provider}" data-version="${profile.version || 0}">保存预设</button></div></article>`;
+  }).join("");
+  document.querySelectorAll(".save-model-prompt").forEach((button) => button.addEventListener("click", async () => {
+    const provider = button.dataset.provider;
+    const input = document.querySelector(`.model-prompt-input[data-provider="${provider}"]`);
+    if (!input) return;
     button.disabled = true;
-    button.textContent = "测试中…";
-    setTimeout(() => {
-      const result = document.querySelector(`[data-result="${button.dataset.index}"]`);
-      result.hidden = false;
-      result.textContent = "✓ 连接成功 · 786ms · 密钥与响应内容均未暴露到浏览器";
+    try {
+      await apiRequest(`/models/${provider}/prompt-profile`, { method: "PUT", body: JSON.stringify({ system_prompt: input.value, expected_version: Number(button.dataset.version || 0) }) });
+      toast("模型预设系统提示词已持久化保存。任务提示词会与其叠加，不会被覆盖。");
+      await loadModelPromptProfiles();
+    } catch (error) {
+      generationFailToast(error, "保存失败：配置可能已被其他页面更新，请刷新后重试。");
+    } finally {
       button.disabled = false;
-      button.textContent = "再次测试";
-      toast(`${button.dataset.model} 配置测试成功。`);
-    }, 950);
+    }
   }));
 }
 
@@ -2159,6 +2195,7 @@ async function bootstrap() {
   renderChapters();
   renderWorkspace();
   renderModels();
+  loadModelPromptProfiles();
   renderIdea();
   updateTopState();
   bindEvents();

@@ -44,6 +44,16 @@ class AIConfig(Base):
 
     story: Mapped[Story] = relationship(back_populates="ai_config")
 
+class ModelPromptProfile(Base):
+    """每个模型的用户可配置预设系统提示词（全局、持久化）。"""
+
+    __tablename__ = "model_prompt_profiles"
+
+    provider: Mapped[str] = mapped_column(String(50), primary_key=True)
+    system_prompt: Mapped[str] = mapped_column(Text, default="")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
 
 class StoryArtifact(Base):
     __tablename__ = "story_artifacts"
