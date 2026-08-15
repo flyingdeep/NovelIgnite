@@ -686,10 +686,10 @@ function renderBlueprintReviews(reviews) {
   if (!el) {
     el = document.createElement("div");
     el.id = "blueprint-reviews-banner";
-    // 插入到 #blueprint-content 同级之前，避免被 renderBlueprint 重写 innerHTML 覆盖
-    const content = document.querySelector("#blueprint-content");
-    if (content && content.parentElement) {
-      content.parentElement.insertBefore(el, content);
+    // 插入到 .blueprint-layout 同级之前；不能放进 grid，否则会抢占一列并挤窄蓝图内容。
+    const layout = document.querySelector(".blueprint-layout");
+    if (layout && layout.parentElement) {
+      layout.parentElement.insertBefore(el, layout);
     }
   }
   const rows = pending.flatMap((r) => (r.suggestions || []).map((s) => {
