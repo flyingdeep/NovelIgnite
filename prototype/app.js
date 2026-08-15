@@ -460,8 +460,30 @@ async function apiRequest(path, options = {}) {
   } finally {
     clearTimeout(timer);
   }
-  if (!response.ok) throw new Error(`API ${response.status}`);
+  if (!response.ok) {
+    let detail = "";
+    try {
+      const body = await response.json();
+      detail = (body && typeof body.detail === "string" ? body.detail : "") || "";
+    } catch (error) { /* 非 JSON 错误体 */ }
+    // 服务端模型链路不可达/繁忙：给出一致、明确的提示（供生成 catch 展示）
+    if (response.status === 502 || response.status === 503 || response.status === 504 || response.status === 429) {
+      const err = new Error(detail || "模型服务暂时不可达或繁忙，请稍后重试，或换个模型。");
+      err.status = response.status;
+      throw err;
+    }
+    const err = new Error(detail || `API ${response.status}`);
+    err.status = response.status;
+    throw err;
+  }
   return response.status === 204 ? null : response.json();
+}
+
+// 生成失败提示：优先显示模型服务不可达/繁忙等明确原因，否则回退通用文案
+function generationFailToast(error, fallback) {
+  const msg = error && error.message;
+  if (msg && /模型|服务|超时|繁忙/.test(msg)) toast(msg);
+  else toast(fallback);
 }
 
 function apiWorkToBook(work) {
@@ -1537,7 +1559,7 @@ function bindWorkspaceEvents() {
       toast(`当前 Scene 正文已生成并自动应用（${produced} 段）。`);
     } catch (error) {
       setThinkingProgress(null);
-      toast("正文生成失败，原文未被修改。");
+      generationFailToast(error, "正文生成失败，原文未被修改。");
     }
     finally { hideThinking(); }
   }));
@@ -1554,7 +1576,7 @@ function bindWorkspaceEvents() {
       currentWorkspaceContext = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/context`, { timeoutMs: 60000 });
       renderWorkspace();
       toast("Beat 正文已生成并自动应用。");
-    } catch (error) { toast("正文生成失败。"); }
+    } catch (error) { generationFailToast(error, "正文生成失败。"); }
     finally { hideThinking(); }
   }));
   // Phase 6: regenerate an applied beat (creates a new applied version)
@@ -1569,7 +1591,7 @@ function bindWorkspaceEvents() {
       currentWorkspaceContext = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/context`);
       renderWorkspace();
       toast("已生成新版本并自动应用，历史正文保留。");
-    } catch (error) { toast("重新生成失败。"); }
+    } catch (error) { generationFailToast(error, "重新生成失败。"); }
     finally { hideThinking(); }
   }));
   // Workspace Markdown editing: author can edit the candidate/current prose and apply it.
@@ -1640,7 +1662,7 @@ function bindWorkspaceEvents() {
       currentWorkspaceContext = await apiRequest(`/stories/${book.id}/chapters/${currentActiveChapterId}/context`, { timeoutMs: 60000 });
       renderWorkspace();
       toast(`已生成并应用 ${produced} 段正文。`);
-    } catch (error) { setThinkingProgress(null); toast("本章剩余正文生成失败。"); }
+    } catch (error) { setThinkingProgress(null); generationFailToast(error, "本章剩余正文生成失败。"); }
     finally { hideThinking(); }
   }));
   // Phase 6: confirm chapter delta and activate next chapter
@@ -2047,6 +2069,13 @@ function bindEvents() {
     const open = event.target.closest("[data-open]");
     if (open) {
       activeBook = open.dataset.open;
+      // 切换故事时重置上一故事的章节/工作台/阅读状态，避免残留章节 ID 请求到新故事（404）
+      currentActiveChapterId = null;
+      currentWorkspaceContext = null;
+      readerData = null;
+      readerActiveChapter = null;
+      window.currentBlueprintVersions = {};
+      blueprintHasData = false;
       const book = books.find((b) => b.id === activeBook);
       // Completed works open directly into the reading mode (step 6).
       if (book && book.stage === "done") {

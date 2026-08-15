@@ -87,6 +87,16 @@ def extract_json(text: str) -> Any:
 # 合规性拒绝/内容策略关键词（用于把 400 类错误归类为内容策略拒绝）。
 _CONTENT_POLICY_HINTS = ("content_filter", "content policy", "moderation", "refusal", "safety", "policy violation", "合规", "内容策略", "安全审查")
 
+# 瞬时错误（可重试）：连接失败、超时、5xx、限流。参数错误/鉴权/合规拒绝不重试。
+_RETRYABLE_ERROR_TYPES = {
+    "APIConnectionError", "APITimeoutError", "Timeout", "ReadTimeout", "ConnectTimeout",
+    "InternalServerError", "RateLimitError", "APIRetryableError", "ConflictError",
+}
+
+
+def _is_retryable(exc: Exception) -> bool:
+    return type(exc).__name__ in _RETRYABLE_ERROR_TYPES
+
 
 def _classify_error(exc: Exception) -> dict[str, Any]:
     """从模型 API 异常提取安全的失败原因，供可观测性记录。
@@ -204,39 +214,48 @@ class OpenAICompatibleAdapter:
         if json_mode and self.spec.supports_json:
             kwargs["response_format"] = {"type": "json_object"}
         start = time.perf_counter()
-        try:
-            if self.spec.provider == "ollama":
-                # 远端 Ollama 走公网：非流式长请求会被链路空闲超时（约 60s）掐断；
-                # 改用流式让数据持续流动，绕过链路超时，也利于边生成边返回
-                kwargs["stream"] = True
-                stream = client.chat.completions.create(**kwargs)
-                parts: list[str] = []
-                for chunk in stream:
-                    if not chunk.choices:
-                        continue
-                    delta = chunk.choices[0].delta
-                    if delta and delta.content:
-                        parts.append(delta.content)
-                text = "".join(parts)
-                duration_ms = (time.perf_counter() - start) * 1000
-                record_generation(action, self.spec.provider, succeeded=True, duration_ms=duration_ms)
-                return text
-            response = client.chat.completions.create(**kwargs)
-            duration_ms = (time.perf_counter() - start) * 1000
-            usage = getattr(response, "usage", None)
-            tokens = None
-            if usage is not None:
-                tokens = {
-                    "prompt": getattr(usage, "prompt_tokens", None),
-                    "completion": getattr(usage, "completion_tokens", None),
-                    "total": getattr(usage, "total_tokens", None),
-                }
-            record_generation(action, self.spec.provider, succeeded=True, duration_ms=duration_ms, tokens=tokens)
-            return response.choices[0].message.content or ""
-        except Exception as exc:
-            duration_ms = (time.perf_counter() - start) * 1000
-            record_generation(action, self.spec.provider, succeeded=False, duration_ms=duration_ms, **_classify_error(exc))
-            raise
+        # 瞬时错误（连接失败/超时/5xx/限流）自动重试，缓解远端模型服务短暂不可达/重启
+        max_attempts = 3
+        last_exc: Exception | None = None
+        for attempt in range(max_attempts):
+            attempt_start = time.perf_counter()
+            try:
+                if self.spec.provider == "ollama":
+                    # 远端 Ollama 走公网：非流式长请求会被链路空闲超时（约 60s）掐断；
+                    # 改用流式让数据持续流动，绕过链路超时，也利于边生成边返回
+                    kwargs["stream"] = True
+                    stream = client.chat.completions.create(**kwargs)
+                    parts: list[str] = []
+                    for chunk in stream:
+                        if not chunk.choices:
+                            continue
+                        delta = chunk.choices[0].delta
+                        if delta and delta.content:
+                            parts.append(delta.content)
+                    text = "".join(parts)
+                    duration_ms = (time.perf_counter() - attempt_start) * 1000
+                    record_generation(action, self.spec.provider, succeeded=True, duration_ms=duration_ms)
+                    return text
+                response = client.chat.completions.create(**kwargs)
+                duration_ms = (time.perf_counter() - attempt_start) * 1000
+                usage = getattr(response, "usage", None)
+                tokens = None
+                if usage is not None:
+                    tokens = {
+                        "prompt": getattr(usage, "prompt_tokens", None),
+                        "completion": getattr(usage, "completion_tokens", None),
+                        "total": getattr(usage, "total_tokens", None),
+                    }
+                record_generation(action, self.spec.provider, succeeded=True, duration_ms=duration_ms, tokens=tokens)
+                return response.choices[0].message.content or ""
+            except Exception as exc:
+                last_exc = exc
+                duration_ms = (time.perf_counter() - attempt_start) * 1000
+                record_generation(action, self.spec.provider, succeeded=False, duration_ms=duration_ms, **_classify_error(exc))
+                if attempt == max_attempts - 1 or not _is_retryable(exc):
+                    raise
+                time.sleep(min(2 ** attempt, 8))
+        raise last_exc  # pragma: no cover - 循环内必然 return 或 raise
 
 
 def configured_model_specs() -> list[ModelSpec]:

@@ -202,6 +202,72 @@ def test_check_model_availability_non_ollama_uses_configured(monkeypatch):
     assert r["reason"] == "missing_api_key"
 
 
+def test_is_retryable_marks_transient_errors():
+    """瞬时错误（连接/超时/5xx/限流）可重试；参数错误/鉴权/合规拒绝不重试。"""
+    from app.infrastructure.model_adapter import _is_retryable
+
+    def make(name):
+        return type(name, (Exception,), {})("x")
+
+    assert _is_retryable(make("APIConnectionError"))
+    assert _is_retryable(make("APITimeoutError"))
+    assert _is_retryable(make("ReadTimeout"))
+    assert _is_retryable(make("InternalServerError"))
+    assert _is_retryable(make("RateLimitError"))
+    assert not _is_retryable(make("BadRequestError"))
+    assert not _is_retryable(make("AuthenticationError"))
+    assert not _is_retryable(make("ContentPolicyRefusalError"))
+
+
+def test_complete_retries_transient_connection_error(monkeypatch):
+    """连接类瞬时错误自动重试后成功返回。"""
+    from app.infrastructure.model_adapter import MODEL_SPECS, OpenAICompatibleAdapter
+
+    spec = next(s for s in MODEL_SPECS if s.provider == "deepseek")
+    calls = {"n": 0}
+
+    class FlakyCompletions:
+        def create(self, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise type("APIConnectionError", (Exception,), {})("Connection error.")
+            return type("Response", (), {"choices": [type("Choice", (), {"message": type("Message", (), {"content": "ok"})()})()], "usage": None})()
+
+    class FlakyClient:
+        def __init__(self, **kwargs):
+            self.chat = type("Chat", (), {"completions": FlakyCompletions()})()
+
+    monkeypatch.setenv(spec.api_key_env, "test")
+    monkeypatch.setattr("openai.OpenAI", FlakyClient)
+    text = OpenAICompatibleAdapter(spec).complete([{"role": "user", "content": "hi"}], action="__retry_test__")
+    assert text == "ok"
+    assert calls["n"] == 2  # 失败 1 次后重试成功
+
+
+def test_complete_does_not_retry_bad_request(monkeypatch):
+    """参数错误/非瞬时错误不重试（避免掩盖真实失败原因）。"""
+    import pytest
+    from app.infrastructure.model_adapter import MODEL_SPECS, OpenAICompatibleAdapter
+
+    spec = next(s for s in MODEL_SPECS if s.provider == "deepseek")
+    calls = {"n": 0}
+
+    class BadCompletions:
+        def create(self, **kwargs):
+            calls["n"] += 1
+            raise type("BadRequestError", (Exception,), {})("max_tokens must be <= 32768")
+
+    class BadClient:
+        def __init__(self, **kwargs):
+            self.chat = type("Chat", (), {"completions": BadCompletions()})()
+
+    monkeypatch.setenv(spec.api_key_env, "test")
+    monkeypatch.setattr("openai.OpenAI", BadClient)
+    with pytest.raises(Exception):
+        OpenAICompatibleAdapter(spec).complete([{"role": "user", "content": "hi"}])
+    assert calls["n"] == 1
+
+
 def test_fake_adapter_is_deterministic_and_records_parameters():
     adapter = FakeModelAdapter('{"candidate": "ok"}')
     assert adapter.complete([], temperature=1.1, reasoning_strength="high", json_mode=True) == '{"candidate": "ok"}'
