@@ -216,14 +216,18 @@ def test_planning_messages_include_blueprint_context(client, monkeypatch):
     user = chapter_msgs[0]["messages"][-1]["content"]
     assert "【核心人物】" in user and "【世界设定】" in user and "【时间线与前史】" in user and "【剧情弧与伏笔】" in user
     assert "林昭" in user and "江海市" in user
+    # 作者原始创作意图必须原样注入，防止后续生成遗忘用户已给出的细节。
+    assert "【作者原始创作意图" in user and "特警卧底调查人口集团。" in user
 
     # 场景计划：同样注入蓝图
     client.post(f"/api/v1/stories/{sid}/chapters/{chapter['id']}/generations", json={"action": "generate_scene_plan"})
     scene_msgs = [c for c in plan_capture.calls if c["action"] == "generate_scene_plan"]
     assert "林昭" in scene_msgs[0]["messages"][-1]["content"] and "江海市" in scene_msgs[0]["messages"][-1]["content"]
+    assert "特警卧底调查人口集团。" in scene_msgs[0]["messages"][-1]["content"]
 
     # 节拍计划：同样注入蓝图
     scene = client.get(f"/api/v1/stories/{sid}/chapters/{chapter['id']}/context").json()["scenes"][0]
     client.post(f"/api/v1/stories/{sid}/chapters/{chapter['id']}/scenes/{scene['id']}/generations", json={"action": "generate_beat_plan"})
     beat_msgs = [c for c in plan_capture.calls if c["action"] == "generate_beat_plan"]
     assert "林昭" in beat_msgs[0]["messages"][-1]["content"] and "江海市" in beat_msgs[0]["messages"][-1]["content"]
+    assert "特警卧底调查人口集团。" in beat_msgs[0]["messages"][-1]["content"]

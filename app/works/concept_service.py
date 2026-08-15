@@ -106,7 +106,7 @@ def generate_concept(db: Session, story_id: str, request: ConceptGenerationReque
     db.flush()
     messages = [
         {"role": "system", "content": compose_system_prompt(db, spec.provider, "generate_concept")},
-        {"role": "user", "content": f"请根据作者创意生成 Story Concept 候选。保留作者意图，不要把未确认内容当事实。作者创意：{story.idea_text}"},
+        {"role": "user", "content": f"请根据作者创意生成 Story Concept 候选。作者已给出的所有细节（人物、关系、冲突、背景、事件、风格等）必须原样完整保留在概念中，禁止删减、简化、改写或合并；只允许在作者未提供的维度上精炼补充。不要把未确认内容当事实。作者创意：{story.idea_text}"},
     ]
     try:
         adapters = build_adapters()

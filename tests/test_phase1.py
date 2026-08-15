@@ -604,6 +604,18 @@ def test_prompts_module_covers_all_actions_and_versions():
     assert prompt_version("unknown_action") == 1
 
 
+def test_concept_prompt_preserves_author_intent():
+    """概念生成提示词必须约束模型完整保留作者已提供的细节，不得删减/简化/改写。"""
+    from app.infrastructure.prompts import system_prompt
+
+    concept = system_prompt("generate_concept")
+    assert "作者意图保留" in concept
+    assert "最高优先" in concept
+    assert "禁止删减" in concept and "简化" in concept and "改写" in concept
+    # summary 必须完整覆盖作者已写细节，不能概括丢弃。
+    assert "不删减" in concept and "不简写" in concept
+
+
 def test_generation_task_records_prompt_version(client, monkeypatch, tmp_path):
     """每次生成在 generation_tasks 记录所用提示词版本（prompt_version）。"""
     from sqlalchemy import create_engine, text

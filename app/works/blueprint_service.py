@@ -31,11 +31,16 @@ _BLUEPRINT_CONTEXT_LABELS = {"concept": "已确认故事概念", "characters": "
 
 
 def build_blueprint_context(db: Session, story_id: str, *, max_chars: int = 6000) -> str:
-    """把已确认 Blueprint（概念 + characters/world/timeline/arc）序列化为紧凑上下文文本。
+    """把作者原始创作意图 + 已确认 Blueprint（概念 + characters/world/timeline/arc）序列化为紧凑上下文文本。
 
     供章节计划 / 场景计划 / 节拍计划 / 正文生成等所有生成环节注入，确保模型基于
     权威设定创作，杜绝自创与蓝图冲突的角色、组织与地名（设定不一致的根因）。
+    作者原始创作意图置于最前且优先保证完整，任何生成都不得删减其中已给出的细节。
     """
+    story = get_story_or_404(db, story_id)
+    idea_block = ""
+    if story.idea_text and story.idea_text.strip():
+        idea_block = f"【作者原始创作意图（最高优先级，任何生成都不得删减、简化或违背其中已给出的细节）】\n{story.idea_text}"
     parts: list[str] = []
     for kind in ("concept", "characters", "world", "timeline", "arc"):
         artifact = latest_blueprint(db, story_id, kind)
@@ -45,8 +50,17 @@ def build_blueprint_context(db: Session, story_id: str, *, max_chars: int = 6000
         text = json.dumps(payload, ensure_ascii=False)
         parts.append(f"【{_BLUEPRINT_CONTEXT_LABELS.get(kind, kind)}】\n{text}")
     joined = "\n\n".join(parts)
+    if idea_block:
+        joined = idea_block + "\n\n" + joined
     if max_chars and len(joined) > max_chars:
-        joined = joined[:max_chars] + "\n…（设定较长已截断，后续内容以蓝图为准）"
+        # 优先保证作者原始意图完整；超限时只截断蓝图部分。
+        if idea_block and len(idea_block) >= max_chars:
+            return idea_block[:max_chars]
+        if idea_block:
+            budget = max_chars - len(idea_block) - 2
+            joined = idea_block + "\n\n" + (joined[len(idea_block) + 2:][:max(0, budget)] or "") + "\n…（设定较长已截断，后续内容以蓝图为准）"
+        else:
+            joined = joined[:max_chars] + "\n…（设定较长已截断，后续内容以蓝图为准）"
     return joined
 
 
