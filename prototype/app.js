@@ -636,10 +636,43 @@ async function loadBlueprintForCurrentStory() {
     const toChapters = document.querySelector("#to-chapters");
     if (toChapters) toChapters.style.display = confirmed ? "" : "none";
     document.querySelector("#blueprint-stage-note").textContent = confirmed ? "已确认 · 当前版本为权威 Blueprint" : (hasAny ? "AI 候选 · 尚未确认" : "尚未生成");
+    // 蓝图更新建议（场景/章节完成后的独立 review 环节产出，待作者确认）
+    try {
+      const reviews = await apiRequest(`/stories/${book.id}/blueprint-reviews`, { timeoutMs: 10000 });
+      renderBlueprintReviews(reviews);
+    } catch (error) {
+      renderBlueprintReviews([]);
+    }
     renderBlueprint(document.querySelector(".blueprint-tab.active")?.dataset.blueprint || "characters");
   } catch (error) {
     window.currentBlueprintVersions = {};
   }
+}
+
+function renderBlueprintReviews(reviews) {
+  const pending = (reviews || []).filter((r) => r.status === "candidate");
+  const total = pending.reduce((n, r) => n + (r.suggestions || []).length, 0);
+  let el = document.querySelector("#blueprint-reviews-banner");
+  if (!total) {
+    if (el) el.remove();
+    return;
+  }
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "blueprint-reviews-banner";
+    // 插入到 #blueprint-content 同级之前，避免被 renderBlueprint 重写 innerHTML 覆盖
+    const content = document.querySelector("#blueprint-content");
+    if (content && content.parentElement) {
+      content.parentElement.insertBefore(el, content);
+    }
+  }
+  const rows = pending.flatMap((r) => (r.suggestions || []).map((s) => {
+    const act = s.action === "add" ? "新增" : "修改";
+    const kindLabel = { characters: "人物", world: "世界", timeline: "时间线", arc: "剧情弧" }[s.kind] || s.kind;
+    const conf = { high: "高", medium: "中", low: "低" }[s.confidence] || s.confidence;
+    return `<li><b>${act}·${kindLabel}</b>「${s.target || ""}」：${s.change || ""} <small>依据：${s.evidence || ""} · 置信 ${conf}</small></li>`;
+  })).join("");
+  el.innerHTML = `<div style="margin:12px 0;padding:10px 12px;border:1px solid #e5b65a;border-radius:10px;background:rgba(229,182,90,.08)"><b style="color:#e5b65a">⚑ 蓝图更新建议（${total} 条待确认）</b><p style="margin:4px 0 0;font-size:12px;color:#9aa4b5">场景/章节完成后的独立 review 环节提出，需作者确认后才更新全局设定。</p><ul style="margin:8px 0 0;padding-left:18px;font-size:13px;line-height:1.7">${rows}</ul></div>`;
 }
 
 async function saveConceptCandidate() {

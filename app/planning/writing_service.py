@@ -21,6 +21,7 @@ from app.infrastructure.prompts import prompt_version, system_prompt
 from app.planning.models import Beat, Chapter, ChapterEvent, ConsistencyIssue, ProseVersion, Scene, StateDelta, StateSnapshot
 from app.planning.workspace_schemas import ProseVersionCreate, ScenePlanGenerationRequest
 from app.planning.workspace_service import _require_active_chapter, get_beat, get_scene
+from app.works.blueprint_service import build_blueprint_context
 from app.works.concept_service import _model_for_config
 from app.works.models import GenerationTask, StoryArtifact
 from app.works.service import get_ai_config
@@ -126,6 +127,38 @@ def apply_beat_prose(db: Session, story_id: str, chapter_id: str, scene_id: str,
 # Context & generation helpers
 # ---------------------------------------------------------------------------
 
+def _latest_prev_beat_prose(db: Session, scene: Scene, beat: Beat) -> str:
+    """取紧邻当前 Beat 的上一个 Beat 的完整已应用正文（跨场景向前追溯）。"""
+    prev = db.scalar(select(Beat).where(Beat.scene_id == scene.id, Beat.ordinal < beat.ordinal).order_by(Beat.ordinal.desc()))
+    if prev is None:
+        prev_scene = db.scalar(select(Scene).where(Scene.chapter_id == scene.chapter_id, Scene.ordinal < scene.ordinal).order_by(Scene.ordinal.desc()))
+        if prev_scene is not None:
+            prev = db.scalar(select(Beat).where(Beat.scene_id == prev_scene.id).order_by(Beat.ordinal.desc()))
+    if prev is None:
+        return ""
+    pv = db.scalar(select(ProseVersion).where(ProseVersion.beat_id == prev.id, ProseVersion.status == "applied").order_by(ProseVersion.version.desc()))
+    return pv.markdown if pv else ""
+
+
+def build_story_progress_summary(db: Session, story_id: str) -> str:
+    """全书至今的故事进展摘要（按章节/场景顺序汇总已完结场景的 summary）。
+
+    供正文生成的「至今故事摘要」要素；仅统计已完成场景，过长时保留最近 6 条。
+    """
+    chapters = list(db.scalars(select(Chapter).where(Chapter.story_id == story_id).order_by(Chapter.ordinal)))
+    blocks: list[str] = []
+    for ch in chapters:
+        scenes = list(db.scalars(select(Scene).where(Scene.chapter_id == ch.id).order_by(Scene.ordinal)))
+        for sc in scenes:
+            if sc.status == "completed" and sc.summary:
+                blocks.append(f"第{ch.ordinal}章·场景{sc.ordinal}「{sc.title or ''}」：{sc.summary}")
+    if not blocks:
+        return ""
+    if len(blocks) <= 6:
+        return "\n".join(blocks)
+    return f"（更早还有 {len(blocks) - 6} 个已完结场景，摘要略）\n" + "\n".join(blocks[-6:])
+
+
 def _build_generation_messages(db: Session, chapter: Chapter, scene: Scene, beat: Beat, snapshot_state: dict[str, Any], prior_prose: str) -> list[dict[str, str]]:
     # Revise later plans: include summaries of earlier completed scenes so the
     # current beat builds on what already happened (Scene Summary feature).
@@ -135,13 +168,29 @@ def _build_generation_messages(db: Session, chapter: Chapter, scene: Scene, beat
         if earlier.summary:
             summaries.append(f"Scene {earlier.ordinal}「{earlier.title or ''}」：{earlier.summary}")
     prior_scenes_block = ("\n".join(summaries) + "\n\n") if summaries else ""
-    # 权威蓝图（设定与人物不得违背），避免正文与蓝图脱节
-    from app.works.blueprint_service import build_blueprint_context
-
-    blueprint_ctx = build_blueprint_context(db, chapter.story_id, max_chars=4000)
+    prev_scene_summary = summaries[-1] if summaries else ""
+    # 权威蓝图（概念 + 人物/世界/时间线/剧情弧）：任何写作的基石，全量注入
+    blueprint_ctx = build_blueprint_context(db, chapter.story_id, max_chars=16000)
+    # Beat 三要素：上一个 Beat 完整正文、上一个 Scene 摘要、全书进展摘要
+    prev_beat_prose = _latest_prev_beat_prose(db, scene, beat)
+    story_progress = build_story_progress_summary(db, chapter.story_id)
     return [
         {"role": "system", "content": system_prompt("generate_scene")},
-        {"role": "user", "content": f"章节目标：{chapter.goal or ''}\n章节梗概：{chapter.summary or ''}\n当前场景：{scene.title or ''}（地点：{scene.location or ''} · 时间：{scene.time or ''} · POV：{scene.pov or ''}）\n场景目标：{scene.character_goals or ''}，冲突：{scene.conflict or ''}，关键事件：{scene.key_events or ''}，场景结果：{scene.scene_result or ''}\n当前节拍：{beat.name or ''}\n节拍指令：{beat.instruction or ''}\n\n权威故事蓝图（人物、地名、组织、世界规则必须严格遵守，不得自行更改或新增冲突设定）：\n{blueprint_ctx}\n\n故事快照（仅本章开始前已成立的事实）：{json.dumps(snapshot_state, ensure_ascii=False)[:4000]}\n\n前序已发生场景摘要（保持剧情连贯）：\n{prior_scenes_block}前序正文（若存在）：\n{prior_prose[:3000]}"},
+        {"role": "user", "content": (
+            f"章节目标：{chapter.goal or ''}\n"
+            f"章节梗概：{chapter.summary or ''}\n"
+            f"当前场景：{scene.title or ''}（地点：{scene.location or ''} · 时间：{scene.time or ''} · POV：{scene.pov or ''}）\n"
+            f"场景目标：{scene.character_goals or ''}，冲突：{scene.conflict or ''}，关键事件：{scene.key_events or ''}，场景结果：{scene.scene_result or ''}\n"
+            f"当前节拍：{beat.name or ''}\n"
+            f"节拍指令：{beat.instruction or ''}\n\n"
+            f"权威故事蓝图（已确认概念 + 人物/世界/时间线/剧情弧，任何章节/场景/节拍写作都必须以此为准，不得违背或自创冲突设定）：\n{blueprint_ctx}\n\n"
+            f"上一个 Beat 完整正文（紧邻衔接用）：\n{prev_beat_prose[:2500] or '（本段为开篇，无上一个 Beat）'}\n\n"
+            f"上一个 Scene 摘要：\n{prev_scene_summary or '（本场景为本章首个场景，无上一个 Scene）'}\n\n"
+            f"全书进展摘要（故事至此为止）：\n{story_progress[:1200] or '（故事刚开始，尚无进展）'}\n\n"
+            f"故事快照（仅本章开始前已成立的事实）：{json.dumps(snapshot_state, ensure_ascii=False)[:4000]}\n\n"
+            f"前序已发生场景摘要（保持剧情连贯）：\n{prior_scenes_block}"
+            f"前序正文（若存在）：\n{prior_prose[:3000]}"
+        )},
     ]
 
 
@@ -249,10 +298,77 @@ def _complete_scene_if_done(db: Session, scene: Scene, config=None) -> bool:
                 scene.summary = _ai_scene_summary(db, scene, config)
             except Exception:
                 scene.summary = scene.scene_result or ""
+        # 独立 review 环节：判断本 Scene 产出是否需要更新蓝图（不阻塞，失败静默）
+        if config is not None:
+            try:
+                ch = db.get(Chapter, scene.chapter_id)
+                if ch is not None:
+                    review_blueprint_updates(db, ch.story_id, ch, scene, None, config, scope="scene")
+            except Exception:
+                pass
         db.commit()
         db.refresh(scene)
         return True
     return False
+
+
+def review_blueprint_updates(db: Session, story_id: str, chapter: Chapter, scene: Scene | None, beat: Beat | None, config, *, scope: str) -> list[dict[str, Any]]:
+    """产出后的蓝图更新 review：判断新产出是否引入需要更新 baseline 蓝图的新设定。
+
+    scope: beat | scene | chapter。beat 级不单独调模型（由 scene 级 review 覆盖其增量，
+    且每个 beat 已跑一致性检查）；scene/chapter 级调模型产出建议，存为
+    StoryArtifact(kind="blueprint_review", status="candidate")，由作者确认后才更新 baseline。
+    失败静默，绝不阻塞写作流程。
+    """
+    if scope not in ("beat", "scene", "chapter"):
+        return []
+    adapter = build_adapters().get(_model_for_config(config.model).provider)
+    if adapter is None:
+        return []
+    prose_parts: list[str] = []
+    if scope == "beat" and beat is not None:
+        pv = latest_prose(db, beat.id)
+        if pv:
+            prose_parts.append(pv.markdown)
+    elif scope == "scene" and scene is not None:
+        for b in db.scalars(select(Beat).where(Beat.scene_id == scene.id).order_by(Beat.ordinal)):
+            pv = latest_prose(db, b.id)
+            if pv:
+                prose_parts.append(pv.markdown)
+    else:  # chapter
+        for sc in db.scalars(select(Scene).where(Scene.chapter_id == chapter.id).order_by(Scene.ordinal)):
+            for b in db.scalars(select(Beat).where(Beat.scene_id == sc.id).order_by(Beat.ordinal)):
+                pv = latest_prose(db, b.id)
+                if pv:
+                    prose_parts.append(pv.markdown)
+    prose_text = "\n\n".join(prose_parts)[:6000]
+    if not prose_text:
+        return []
+    blueprint_ctx = build_blueprint_context(db, story_id, max_chars=6000)
+    messages = [
+        {"role": "system", "content": system_prompt("review_blueprint_updates")},
+        {"role": "user", "content": f"review 范围：{scope}（第{chapter.ordinal}章）\n\n当前权威蓝图：\n{blueprint_ctx}\n\n本单元已应用正文：\n{prose_text}"},
+    ]
+    try:
+        raw = adapter.complete(messages, temperature=0.3, reasoning_strength="low", json_mode=True, action="review_blueprint_updates")
+        suggestions = extract_json(raw)
+        if not isinstance(suggestions, list):
+            suggestions = []
+        if suggestions:
+            previous = db.scalar(select(StoryArtifact).where(StoryArtifact.story_id == story_id, StoryArtifact.kind == "blueprint_review").order_by(StoryArtifact.version.desc()))
+            db.add(StoryArtifact(
+                story_id=story_id,
+                kind="blueprint_review",
+                layer="living",
+                payload=json.dumps({"scope": scope, "chapter_ordinal": chapter.ordinal, "scene_id": scene.id if scene else None, "beat_id": beat.id if beat else None, "suggestions": suggestions}, ensure_ascii=False),
+                status="candidate",
+                version=(previous.version + 1 if previous else 1),
+                source_task_id=None,
+            ))
+            db.flush()
+        return suggestions
+    except Exception:
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -654,6 +770,12 @@ def confirm_chapter_delta(db: Session, story_id: str, chapter_id: str, expected_
     if next_chapter is not None:
         db.refresh(next_chapter)
         result["next_chapter"] = {"id": next_chapter.id, "ordinal": next_chapter.ordinal, "title": next_chapter.title, "access_status": next_chapter.access_status}
+    # 独立 review 环节：判断本章产出是否需要更新蓝图（不阻塞，失败静默）
+    try:
+        config = get_ai_config(db, story_id)
+        review_blueprint_updates(db, story_id, chapter, None, None, config, scope="chapter")
+    except Exception:
+        pass
     return result
 
 

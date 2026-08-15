@@ -152,6 +152,14 @@ def get_blueprint(story_id: str, db: Session = Depends(get_db)):
     return {kind: artifact_response(artifact) if artifact else None for kind, artifact in artifacts.items()}
 
 
+@router.get("/stories/{story_id}/blueprint-reviews")
+def get_blueprint_reviews(story_id: str, db: Session = Depends(get_db)):
+    """场景/章节完成后产生的蓝图更新建议（待作者确认）。"""
+    from app.works.blueprint_service import list_blueprint_reviews
+
+    return list_blueprint_reviews(db, story_id)
+
+
 @router.get("/stories/{story_id}/living-state/history")
 def get_living_state_history(story_id: str, db: Session = Depends(get_db)):
     """All Living State versions (newest first) for the version-history modal."""

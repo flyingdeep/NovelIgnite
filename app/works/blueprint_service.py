@@ -60,6 +60,26 @@ def list_living_state_history(db: Session, story_id: str) -> list[StoryArtifact]
     return list(db.scalars(select(StoryArtifact).where(StoryArtifact.story_id == story_id, StoryArtifact.kind == "living_state").order_by(StoryArtifact.version.desc())))
 
 
+def list_blueprint_reviews(db: Session, story_id: str) -> list[dict[str, Any]]:
+    """列出所有待作者确认的蓝图更新建议（最新在前）。"""
+    get_story_or_404(db, story_id)
+    artifacts = list(db.scalars(select(StoryArtifact).where(StoryArtifact.story_id == story_id, StoryArtifact.kind == "blueprint_review").order_by(StoryArtifact.version.desc())))
+    out: list[dict[str, Any]] = []
+    for artifact in artifacts:
+        payload = json.loads(artifact.payload) if artifact.payload else {}
+        out.append({
+            "id": artifact.id,
+            "version": artifact.version,
+            "status": artifact.status,
+            "scope": payload.get("scope", ""),
+            "chapter_ordinal": payload.get("chapter_ordinal"),
+            "scene_id": payload.get("scene_id"),
+            "suggestions": payload.get("suggestions", []),
+            "created_at": artifact.created_at.isoformat() if artifact.created_at else None,
+        })
+    return out
+
+
 def fallback_blueprint(idea: str, concept: dict[str, Any]) -> dict[str, dict[str, Any]]:
     summary = concept.get("summary") or idea
     return {
@@ -91,6 +111,16 @@ def normalize_blueprint_payload(payload: Any, idea: str, concept: dict[str, Any]
     return fallback_blueprint(idea, concept), True
 
 
+def _blueprint_scale_for_length(length: str) -> str:
+    """按概念预计篇幅给出蓝图信息量档位，使设定规模与文章长短匹配。"""
+    low = (length or "").lower()
+    if any(k in low for k in ("短篇", "短片", "短剧", "短")):
+        return "本作篇幅较短：请精简设定——总出场人物 3-6 人，世界 2-3 个地点、1-2 个组织，时间线 1-2 条关键前史，剧情弧单主线即可。"
+    if any(k in low for k in ("长篇", "长剧", "长片", "十万", "几十万")):
+        return "本作为长篇/复杂剧情：请充实设定——总出场人物 12-20 人（主角/盟友宿敌/反派核心/支线配角分层），世界观 3-4 个功能区域、3-5 个组织势力与制衡关系，时间线 3-5 条关键前史，剧情弧主线 + 2-3 条支线/暗线。"
+    return "本作篇幅中等：设定适度——总出场人物 6-12 人，世界 3 个功能区域、2-3 个组织，时间线 2-3 条关键前史，剧情弧主线 + 1 条支线。"
+
+
 def generate_blueprint(db: Session, story_id: str, request: BlueprintGenerationRequest) -> list[StoryArtifact]:
     story = get_story_or_404(db, story_id)
     if story.stage not in {"concept_confirmed", "blueprint_review", "blueprint_confirmed"}:
@@ -104,7 +134,7 @@ def generate_blueprint(db: Session, story_id: str, request: BlueprintGenerationR
     db.flush()
     messages = [
         {"role": "system", "content": system_prompt("generate_blueprint")},
-        {"role": "user", "content": f"根据已确认故事概念与作者创意生成全局 Blueprint。只生成稳定 Baseline，不生成章节状态。Concept：{json.dumps(concept_payload, ensure_ascii=False)} Idea：{story.idea_text}"},
+        {"role": "user", "content": f"根据已确认故事概念与作者创意生成全局 Blueprint。{_blueprint_scale_for_length(str(concept_payload.get('length') or ''))}只生成稳定 Baseline，不生成章节状态。Concept：{json.dumps(concept_payload, ensure_ascii=False)} Idea：{story.idea_text}"},
     ]
     try:
         adapter = build_adapters().get(spec.provider)

@@ -446,3 +446,50 @@ def test_generate_beat_by_beat_completes_scene_with_summary(client, monkeypatch)
     assert scene0["status"] == "completed"
     assert scene0["summary"] == summary_text
 
+
+def test_prose_messages_include_beat_three_elements(client, monkeypatch):
+    """正文上下文包含 Beat 三要素：上一 Beat 完整正文、上一 Scene 摘要、全书进展摘要 + 权威蓝图。"""
+    adapter = DispatchAdapter({
+        "generate_scene": PROSE_TEXT,
+        "extract_delta": EMPTY_EXTRACT,
+        "consistency_check": "[]",
+        "scene_summary": "第一场景摘要。",
+        "review_blueprint_updates": "[]",
+    })
+    story_id, chapter, scenes = _setup_chapter_with_scenes(client, monkeypatch)
+    monkeypatch.setattr("app.planning.writing_service.build_adapters", lambda: {"deepseek": adapter})
+    scene = scenes[0]
+    client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/generations", json={"action": "generate_scene"})
+    gen_calls = [c for c in adapter.calls if c["action"] == "generate_scene"]
+    assert gen_calls
+    user = gen_calls[0]["messages"][-1]["content"]
+    assert "权威故事蓝图" in user and "概念" in user and "人物" in user
+    assert "上一个 Beat 完整正文" in user
+    assert "上一个 Scene 摘要" in user
+    assert "全书进展摘要" in user
+
+
+def test_scene_review_produces_blueprint_update_suggestion(client, monkeypatch):
+    """Scene 完成后的独立 review 环节产出蓝图更新建议（API 可查询）。"""
+    review_json = json.dumps([{
+        "action": "add", "kind": "characters", "target": "神秘委托人",
+        "change": "新增线索角色，推动后续调查", "evidence": "正文出现匿名委托人",
+        "confidence": "medium",
+    }], ensure_ascii=False)
+    adapter = DispatchAdapter({
+        "generate_scene": PROSE_TEXT,
+        "extract_delta": EMPTY_EXTRACT,
+        "consistency_check": "[]",
+        "scene_summary": "摘要。",
+        "review_blueprint_updates": review_json,
+    })
+    story_id, chapter, scenes = _setup_chapter_with_scenes(client, monkeypatch)
+    monkeypatch.setattr("app.planning.writing_service.build_adapters", lambda: {"deepseek": adapter})
+    scene = scenes[0]
+    client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/generations", json={"action": "generate_scene"})
+    reviews = client.get(f"/api/v1/stories/{story_id}/blueprint-reviews").json()
+    assert reviews, "场景完成后应产生蓝图更新建议"
+    assert reviews[0]["scope"] == "scene"
+    assert reviews[0]["suggestions"][0]["kind"] == "characters"
+    assert reviews[0]["suggestions"][0]["evidence"]
+

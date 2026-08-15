@@ -484,7 +484,7 @@ def test_chapter_plan_normalize_object_wrapper():
 ALL_GENERATION_ACTIONS = {
     "generate_concept", "generate_title", "generate_blueprint", "generate_chapter_plan",
     "generate_scene_plan", "generate_beat_plan", "generate_scene", "scene_summary",
-    "extract_delta", "consistency_check",
+    "extract_delta", "consistency_check", "review_blueprint_updates",
 }
 
 
