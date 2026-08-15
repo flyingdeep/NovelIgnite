@@ -23,7 +23,7 @@ from app.infrastructure.prompts import prompt_version, system_prompt
 from app.planning.models import Beat, Chapter, ChapterEvent, ConsistencyIssue, ProseVersion, Scene, StateDelta, StateSnapshot
 from app.planning.workspace_schemas import ProseVersionCreate, ScenePlanGenerationRequest
 from app.planning.workspace_service import _require_active_chapter, get_beat, get_scene
-from app.works.blueprint_service import BLUEPRINT_KINDS, build_blueprint_context, latest_blueprint
+from app.works.blueprint_service import BLUEPRINT_KINDS, build_blueprint_context, build_focused_blueprint_context, latest_blueprint
 from app.works.concept_service import _model_for_config
 from app.works.models import GenerationTask, StoryArtifact
 from app.works.service import get_ai_config
@@ -161,6 +161,38 @@ def build_story_progress_summary(db: Session, story_id: str) -> str:
     return f"（更早还有 {len(blocks) - 6} 个已完结场景，摘要略）\n" + "\n".join(blocks[-6:])
 
 
+def _build_character_state_card(scene: Scene, snapshot_state: dict[str, Any]) -> str:
+    """B·即时状态卡：从章节入口快照提取当前 POV 人物的即时状态，作为连贯锚点。
+
+    让模型知道人物「此刻在哪里、在做什么、情绪如何、目标是什么」，避免上下文里
+    只有密集设定而没有当前动作锚点；同时与上一 Beat 的衔接共同支撑连贯性。
+    """
+    pov = (scene.pov or "").strip()
+    if not pov:
+        return ""
+    state = (snapshot_state or {}).get("characters") or {}
+    entries = state.get("entries") if isinstance(state, dict) else []
+    if not isinstance(entries, list):
+        return ""
+    entry = next((e for e in entries if isinstance(e, dict) and (e.get("name") or "") == pov), None)
+    if not entry:
+        return f"- 人物：{pov}（本章入口快照中暂无该人物即时明细，以蓝图设定为准）"
+    fields = entry.get("fields")
+    if isinstance(fields, str):
+        return f"- 人物：{pov}\n- 快照：{fields[:300]}"
+    if not isinstance(fields, dict):
+        return f"- 人物：{pov}"
+    keys = ("位置", "地点", "所在", "情绪", "心态", "目标", "行动", "状态", "身心", "关系", "掌握", "携带", "物品", "穿着", "着装", "动作", "决断", "意图")
+    lines = [f"- 人物：{pov}"]
+    for k, v in fields.items():
+        if any(kk in str(k) for kk in keys):
+            val = v if isinstance(v, str) else ("；".join(str(x) for x in v) if isinstance(v, list) else str(v))
+            lines.append(f"- {k}：{val}")
+    if len(lines) == 1:
+        lines.append("- 本章入口快照中暂无即时状态明细")
+    return "\n".join(lines)
+
+
 def _build_generation_messages(db: Session, chapter: Chapter, scene: Scene, beat: Beat, snapshot_state: dict[str, Any], prior_prose: str) -> list[dict[str, str]]:
     # Revise later plans: include summaries of earlier completed scenes so the
     # current beat builds on what already happened (Scene Summary feature).
@@ -171,9 +203,14 @@ def _build_generation_messages(db: Session, chapter: Chapter, scene: Scene, beat
             summaries.append(f"Scene {earlier.ordinal}「{earlier.title or ''}」：{earlier.summary}")
     prior_scenes_block = ("\n".join(summaries) + "\n\n") if summaries else ""
     prev_scene_summary = summaries[-1] if summaries else ""
-    # 权威蓝图（概念 + 人物/世界/时间线/剧情弧）：任何写作的基石，全量注入
-    blueprint_ctx = build_blueprint_context(db, chapter.story_id, max_chars=16000)
+    # A·聚焦蓝图（只注入当前 POV/地点的相关设定，减少设定密度对行文的挤压）：
+    # 概念 + 全部人物（POV 置顶）+ 按当前地点过滤的世界 + 时间线/剧情弧。
+    blueprint_ctx = build_focused_blueprint_context(db, chapter.story_id, pov=scene.pov or "", location=scene.location or "", max_chars=14000)
     model_provider = _model_for_config(get_ai_config(db, chapter.story_id).model).provider
+    # B·即时状态卡 + 场景情绪走向（连贯锚点）
+    state_card = _build_character_state_card(scene, snapshot_state)
+    emotion_line = (f"本场景情绪走向：由冲突「{scene.conflict or ''}」驱动，围绕目标「{scene.character_goals or ''}」，向「{scene.scene_result or ''}」收束。"
+                    f"写作时先把『谁在哪、在做什么』写清楚，再让读者的情绪沿这条线自然流动，不要直接堆氛围或设定。")
     # Beat 三要素：上一个 Beat 完整正文、上一个 Scene 摘要、全书进展摘要
     prev_beat_prose = _latest_prev_beat_prose(db, scene, beat)
     story_progress = build_story_progress_summary(db, chapter.story_id)
@@ -186,7 +223,9 @@ def _build_generation_messages(db: Session, chapter: Chapter, scene: Scene, beat
             f"场景目标：{scene.character_goals or ''}，冲突：{scene.conflict or ''}，关键事件：{scene.key_events or ''}，场景结果：{scene.scene_result or ''}\n"
             f"当前节拍：{beat.name or ''}\n"
             f"节拍指令：{beat.instruction or ''}\n\n"
-            f"权威故事蓝图（已确认概念 + 人物/世界/时间线/剧情弧，任何章节/场景/节拍写作都必须以此为准，不得违背或自创冲突设定）：\n{blueprint_ctx}\n\n"
+            f"权威故事蓝图（聚焦当前场景的 POV 与地点；任何章节/场景/节拍写作都必须以此为准，不得违背或自创冲突设定）：\n{blueprint_ctx}\n\n"
+            f"当前 POV 人物即时状态（来自本章入口快照，保持连贯，不要写与快照矛盾的状态）：\n{state_card or '（无）'}\n\n"
+            f"{emotion_line}\n\n"
             f"上一个 Beat 完整正文（紧邻衔接用）：\n{prev_beat_prose[:2500] or '（本段为开篇，无上一个 Beat）'}\n\n"
             f"上一个 Scene 摘要：\n{prev_scene_summary or '（本场景为本章首个场景，无上一个 Scene）'}\n\n"
             f"全书进展摘要（故事至此为止）：\n{story_progress[:1200] or '（故事刚开始，尚无进展）'}\n\n"
@@ -235,6 +274,19 @@ def _generate_beat(db: Session, story_id: str, chapter: Chapter, scene: Scene, b
             messages = _build_generation_messages(db, chapter, scene, beat, snapshot_state, prior_text)
             raw = adapter.complete(messages, temperature=config.temperature, reasoning_strength=config.reasoning_strength, json_mode=False, action="generate_scene")
             markdown = (raw or "").strip() or _fallback_prose(beat, scene)
+            # C·可读性自检：轻量重写（保持原意/情节/事实不变，只提升可读性与自然度）。
+            # 失败或返回为空/原文时静默保持初稿，绝不阻塞写作。
+            try:
+                review_messages = [
+                    {"role": "system", "content": compose_system_prompt(db, _model_for_config(config.model).provider, "readability_review")},
+                    {"role": "user", "content": f"请检查并重写以下正文（保持原意、情节与人物言行完全不变，只提升可读性与自然度；若已通顺则原样返回）：\n\n{markdown}"},
+                ]
+                rewritten = adapter.complete(review_messages, temperature=0.3, reasoning_strength="low", json_mode=False, action="readability_review")
+                rw = (rewritten or "").strip()
+                if rw and rw != markdown:
+                    markdown = rw
+            except Exception:
+                pass
         else:
             markdown = _fallback_prose(beat, scene)
         version = (latest_prose(db, beat.id).version + 1) if latest_prose(db, beat.id) else 1

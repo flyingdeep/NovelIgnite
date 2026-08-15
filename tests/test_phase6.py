@@ -532,3 +532,92 @@ def test_scene_review_produces_blueprint_update_suggestion(client, monkeypatch):
     history = client.get(f"/api/v1/stories/{story_id}/blueprint/characters/history").json()
     assert [h["version"] for h in history] == [chars["version"], 1]
 
+
+def test_focused_blueprint_context_filters_by_location(tmp_path):
+    """A·聚焦蓝图：world 按当前地点过滤、组织/规则保留（防自创）、POV 人物置顶。"""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.infrastructure.database import Base
+    from app.works.blueprint_service import build_focused_blueprint_context
+    from app.works.models import Story, StoryArtifact
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'focused.db'}", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    story = Story(title="聚焦测试", idea_text="调查员潜入码头追查线索。")
+    db.add(story)
+    db.flush()
+    sid = story.id
+
+    def art(kind, payload):
+        db.add(StoryArtifact(story_id=sid, kind=kind, layer="baseline", payload=json.dumps(payload, ensure_ascii=False), status="confirmed", version=1, locked_paths="[]"))
+
+    art("concept", {"summary": "调查员追查线索。", "length": "中篇"})
+    art("characters", {"entries": [
+        {"name": "沈砚", "role": "反派", "fields": {"性格": "阴沉"}},
+        {"name": "林墨", "role": "主角", "fields": {"性格": "谨慎"}},
+    ]})
+    art("world", {"entries": [
+        {"name": "暗流码头", "role": "调查主场景", "fields": {"描述": "废旧码头"}},
+        {"name": "CBD 豪宅", "role": "反派居所", "fields": {"描述": "市中心"}},
+        {"name": "陈氏集团", "role": "组织势力", "fields": {"描述": "反派集团"}},
+        {"name": "世界规则", "role": "规则", "fields": {"描述": "记忆不能外泄"}},
+    ]})
+    art("timeline", {"entries": [{"name": "前史", "role": "x", "fields": {"事件": "三年前事故"}}]})
+    art("arc", {"entries": [{"name": "主线", "role": "x", "fields": {"方向": "追查"}}]})
+    db.commit()
+
+    ctx = build_focused_blueprint_context(db, sid, pov="林墨", location="暗流码头")
+    assert "暗流码头" in ctx
+    assert "CBD 豪宅" not in ctx, "无关地点应被过滤"
+    assert "陈氏集团" in ctx, "组织条目应保留（防自创）"
+    assert "世界规则" in ctx, "规则条目应保留（防自创）"
+    assert ctx.index("林墨") < ctx.index("沈砚"), "POV 人物应置顶"
+    assert ctx.index("调查员潜入码头") < ctx.index("核心人物"), "原始创作意图应置顶"
+    db.close()
+
+
+def test_prose_messages_include_state_card_and_emotion(client, monkeypatch):
+    """B·正文上下文包含即时状态卡与场景情绪走向（连贯锚点）。"""
+    adapter = DispatchAdapter({
+        "generate_scene": PROSE_TEXT,
+        "extract_delta": EMPTY_EXTRACT,
+        "consistency_check": "[]",
+        "scene_summary": "摘要。",
+        "review_blueprint_updates": "[]",
+        "readability_review": PROSE_TEXT,
+    })
+    story_id, chapter, scenes = _setup_chapter_with_scenes(client, monkeypatch)
+    monkeypatch.setattr("app.planning.writing_service.build_adapters", lambda: {"deepseek": adapter})
+    scene = scenes[0]
+    client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/generations", json={"action": "generate_scene"})
+    gen_calls = [c for c in adapter.calls if c["action"] == "generate_scene"]
+    assert gen_calls
+    user = gen_calls[0]["messages"][-1]["content"]
+    assert "当前 POV 人物即时状态" in user
+    assert "本场景情绪走向" in user
+    assert "权威故事蓝图（聚焦当前场景" in user
+    assert "核心人物】（当前 POV" in user
+
+
+def test_readability_review_rewrites_prose(client, monkeypatch):
+    """C·可读性自检：生成后重写正文（保持情节，只提升可读性）。"""
+    rewritten = "夜很沉。林墨推开鉴定所后门，门槛上静静躺着一张没有署名的纸条。"
+    adapter = DispatchAdapter({
+        "generate_scene": PROSE_TEXT,
+        "extract_delta": EMPTY_EXTRACT,
+        "consistency_check": "[]",
+        "scene_summary": "摘要。",
+        "review_blueprint_updates": "[]",
+        "readability_review": rewritten,
+    })
+    story_id, chapter, scenes = _setup_chapter_with_scenes(client, monkeypatch)
+    monkeypatch.setattr("app.planning.writing_service.build_adapters", lambda: {"deepseek": adapter})
+    scene = scenes[0]
+    r = client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/generations", json={"action": "generate_scene"})
+    assert r.status_code == 200
+    produced = r.json()["prose_versions"]
+    assert produced and produced[0]["markdown"] == rewritten, "可读性自检应重写正文"
+    assert any(c["action"] == "readability_review" for c in adapter.calls)
+

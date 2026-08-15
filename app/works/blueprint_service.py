@@ -68,6 +68,87 @@ def build_blueprint_context(db: Session, story_id: str, *, max_chars: int = 6000
     return joined
 
 
+_WORLD_ORG_HINTS = ("组织", "集团", "势力", "帮派", "社团", "协会", "联盟", "家族", "财阀")
+_WORLD_RULE_HINTS = ("规则", "法则", "体系", "世界背景")
+
+
+def build_focused_blueprint_context(db: Session, story_id: str, *, pov: str = "", location: str = "", max_chars: int = 14000) -> str:
+    """正文生成专用：聚焦当前场景的蓝图上下文（减少设定密度对行文的挤压）。
+
+    与 build_blueprint_context 的区别（A·减法 + 针对性）：
+    - 概念：完整；
+    - characters：全部人物（一致性权威，防止模型自创），当前 POV 人物置于最前并标注；
+    - world：仅保留与当前 location 命中的地点条目 + 组织/势力条目 + 世界规则条目（防自创）；
+      若 location 无任何命中则保留全部（宁可冗余也不让模型自创地点/规则）；
+    - timeline / arc：完整（条目通常较少）；
+    - living 投影不进入正文上下文；作者原始创作意图仍置顶且优先保证完整。
+    """
+    story = get_story_or_404(db, story_id)
+    idea_block = ""
+    if story.idea_text and story.idea_text.strip():
+        idea_block = f"【作者原始创作意图（最高优先级，任何生成都不得删减、简化或违背其中已给出的细节）】\n{story.idea_text}"
+    parts: list[str] = []
+
+    concept = latest_blueprint(db, story_id, "concept")
+    if concept:
+        cp = json.loads(concept.payload)
+        if isinstance(cp, dict):
+            cp = {k: v for k, v in cp.items() if k != "_ai_updates"}
+        parts.append(f"【已确认故事概念】\n{json.dumps(cp, ensure_ascii=False)}")
+
+    chars = latest_blueprint(db, story_id, "characters")
+    if chars:
+        cp = json.loads(chars.payload)
+        if not isinstance(cp, dict):
+            cp = {}
+        entries = cp.get("entries") or []
+        if pov and entries:
+            entries = sorted(entries, key=lambda e: 0 if str(e.get("name", "")) == pov else 1)
+        parts.append(f"【核心人物】（当前 POV：{pov or '未指定'}）\n{json.dumps({'title': cp.get('title', ''), 'entries': entries}, ensure_ascii=False)}")
+
+    world = latest_blueprint(db, story_id, "world")
+    if world:
+        wp = json.loads(world.payload)
+        if not isinstance(wp, dict):
+            wp = {}
+        wentries: list[Any] = []
+        for e in wp.get("entries") or []:
+            if not isinstance(e, dict):
+                continue
+            name = str(e.get("name") or "")
+            role = str(e.get("role") or "")
+            text = name + role + "".join(str(v) for v in (e.get("fields") or {}).values())
+            if location and location in text:
+                wentries.append(e)
+                continue
+            if any(h in role or h in name for h in _WORLD_ORG_HINTS) or any(h in name or h in role for h in _WORLD_RULE_HINTS):
+                wentries.append(e)
+        if not wentries:
+            wentries = wp.get("entries") or []
+        parts.append(f"【世界设定】（当前地点：{location or '未指定'}）\n{json.dumps({'title': wp.get('title', ''), 'entries': wentries}, ensure_ascii=False)}")
+
+    for kind, label in (("timeline", "时间线与前史"), ("arc", "剧情弧与伏笔")):
+        artifact = latest_blueprint(db, story_id, kind)
+        if artifact:
+            ap = json.loads(artifact.payload)
+            if isinstance(ap, dict):
+                ap = {k: v for k, v in ap.items() if k != "_ai_updates"}
+            parts.append(f"【{label}】\n{json.dumps(ap, ensure_ascii=False)}")
+
+    joined = "\n\n".join(parts)
+    if idea_block:
+        joined = idea_block + "\n\n" + joined
+    if max_chars and len(joined) > max_chars:
+        if idea_block and len(idea_block) >= max_chars:
+            return idea_block[:max_chars]
+        if idea_block:
+            budget = max_chars - len(idea_block) - 2
+            joined = idea_block + "\n\n" + (joined[len(idea_block) + 2:][:max(0, budget)] or "") + "\n…（设定较长已截断，后续内容以蓝图为准）"
+        else:
+            joined = joined[:max_chars] + "\n…（设定较长已截断，后续内容以蓝图为准）"
+    return joined
+
+
 def list_blueprint(db: Session, story_id: str) -> dict[str, dict[str, Any] | None]:
     get_story_or_404(db, story_id)
     return {kind: latest_blueprint(db, story_id, kind) for kind in (*BLUEPRINT_KINDS, "living_state")}
