@@ -388,6 +388,12 @@ def _fallback_scene_plan(chapter: Chapter, idea: str) -> list[dict[str, Any]]:
 
 
 def _fallback_beat_plan(scene: Scene) -> list[dict[str, Any]]:
+    """仅作兜底：模型不可用/输出格式错误时，为场景生成通用五段式 Beat。
+
+    注意：场景计划创建场景时**不再预填**这套模板（否则前端会判定「Beat 已存在」，
+    永远跳过模型节拍计划，导致所有场景千篇一律）。模型正常时由 generate_beat_plan
+    按场景戏剧需求自由设计 Beat，这里只在生成失败时兜底。
+    """
     return [
         {"name": "场景进入", "instruction": "描写场景进入与环境，建立空间与情绪基调。"},
         {"name": "人物行动", "instruction": "主角采取行动，推进冲突。"},
@@ -422,9 +428,9 @@ def _apply_scene_plan(db: Session, chapter: Chapter, scenes_data: list[dict[str,
         db.add(scene)
         created.append(scene)
     db.flush()
-    for scene in created:
-        for b_ordinal, beat in enumerate(_fallback_beat_plan(scene), 1):
-            db.add(Beat(scene_id=scene.id, ordinal=b_ordinal, name=beat["name"], instruction=beat["instruction"], status="available" if (scene.ordinal == 1 and b_ordinal == 1) else "planned"))
+    # 不预填 Beat：场景刚创建时 Beat 为空，前端工作台会针对无 Beat 场景自动触发
+    # generate_beat_plan（模型按场景戏剧需求自由设计，而非固定五段式模板）。
+    # 模型不可用/格式错误时由 generate_beat_plan 内的 _fallback_beat_plan 兜底。
     return created
 
 

@@ -10,13 +10,32 @@ SCENE_PLAN_JSON = json.dumps([
 
 PROSE_TEXT = "夜色沉了下来。林墨推开鉴定所的后门，一张没有署名的纸条静静躺在门槛上。"
 
+BEAT_PLAN_JSON = json.dumps([
+    {"name": "推开鉴定所后门", "instruction": "写林墨推开后门，描写环境并发现门槛上的无名纸条。"},
+    {"name": "检视纸条内容", "instruction": "写林墨展开纸条，读出匿名委托与异常样本编号。"},
+    {"name": "决定接下委托", "instruction": "写林墨权衡后收下纸条，为下一场景留下悬念。"},
+], ensure_ascii=False)
+
+
+class _WorkspaceAdapter:
+    """按 action 区分返回：场景计划 vs 节拍计划（场景计划后不再预填 Beat）。"""
+
+    def __init__(self, scene_json: str, beat_json: str):
+        self.scene_json = scene_json
+        self.beat_json = beat_json
+        self.calls: list[str] = []
+
+    def complete(self, messages, *, temperature=0.7, reasoning_strength="medium", json_mode=False, max_tokens=4096, action="chat"):
+        self.calls.append(action)
+        return self.beat_json if action == "generate_beat_plan" else self.scene_json
+
 
 def _setup_chapter_with_scenes(client, monkeypatch, title="Phase6 流程"):
-    """Walk a story to chapter-planning and generate a scene plan with beats (2 chapters)."""
+    """Walk a story to chapter-planning and generate a scene plan + beat plans (2 chapters)."""
     monkeypatch.setattr("app.works.concept_service.build_adapters", lambda: {})
     monkeypatch.setattr("app.works.blueprint_service.build_adapters", lambda: {})
     monkeypatch.setattr("app.planning.service.build_adapters", lambda: {"deepseek": FakeModelAdapter('{"chapters":[{"title":"第一章","goal":"g","summary":"s","main_characters":["林墨"],"arc_role":"主线"},{"title":"第二章","goal":"g2"}]}')})
-    monkeypatch.setattr("app.planning.workspace_service.build_adapters", lambda: {"deepseek": FakeModelAdapter(SCENE_PLAN_JSON)})
+    monkeypatch.setattr("app.planning.workspace_service.build_adapters", lambda: {"deepseek": _WorkspaceAdapter(SCENE_PLAN_JSON, BEAT_PLAN_JSON)})
     monkeypatch.setattr("app.planning.writing_service.build_adapters", lambda: {"deepseek": FakeModelAdapter(PROSE_TEXT)})
     created = client.post("/api/v1/works", json={"title": title}).json()
     story_id = created["id"]
@@ -28,6 +47,9 @@ def _setup_chapter_with_scenes(client, monkeypatch, title="Phase6 流程"):
     chapters = client.post(f"/api/v1/stories/{story_id}/chapter-plan", json={"action": "generate_chapter_plan"}).json()["chapters"]
     chapter = chapters[0]
     scenes = client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/generations", json={"action": "generate_scene_plan"}).json()["scenes"]
+    # 场景计划不再预填 Beat：为每个场景补生成节拍计划（模拟前端工作台自动接管）。
+    for scene in scenes:
+        client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/generations", json={"action": "generate_beat_plan"})
     return story_id, chapter, scenes
 
 
@@ -163,6 +185,9 @@ def test_confirm_chapter_delta_activates_next_chapter(client, monkeypatch):
     chapter = next(c for c in chapters if c["access_status"] == "active")
     locked = next(c for c in chapters if c["access_status"] == "locked")
     scenes = client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/generations", json={"action": "generate_scene_plan"}).json()["scenes"]
+    # 场景计划不再预填 Beat：为章节完成流程补生成节拍计划。
+    for scene in scenes:
+        client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/generations", json={"action": "generate_beat_plan"})
     # Apply every beat in the chapter so the chapter can be completed.
     context = client.get(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/context").json()
     for scene in context["scenes"]:
@@ -215,6 +240,10 @@ def test_living_state_versions_increment_per_confirmed_chapter(client, monkeypat
     chapters = client.post(f"/api/v1/stories/{story_id}/chapter-plan", json={"action": "generate_chapter_plan"}).json()["chapters"]
     for chapter in chapters:
         client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/generations", json={"action": "generate_scene_plan"})
+        # 场景计划不再预填 Beat：为章节完成流程补生成节拍计划。
+        context = client.get(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/context").json()
+        for scene in context["scenes"]:
+            client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene['id']}/generations", json={"action": "generate_beat_plan"})
         context = client.get(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/context").json()
         for scene in context["scenes"]:
             for beat in scene["beats"]:

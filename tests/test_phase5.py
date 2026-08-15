@@ -110,6 +110,22 @@ def test_beat_plan_generation_ordering(client, monkeypatch):
     assert context["scenes"][0]["beats"][0]["name"] == beats[0]["name"]
 
 
+def test_scene_plan_does_not_prefill_beats(client, monkeypatch):
+    """场景计划生成后场景不再预填固定五段式 Beat；由 generate_beat_plan 按戏剧需求生成。"""
+    monkeypatch.setattr("app.planning.workspace_service.build_adapters", lambda: {"deepseek": FakeModelAdapter(SCENE_PLAN_JSON)})
+    story_id, chapter = _setup_chapter_plan(client, monkeypatch)
+    scenes = client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/generations", json={"action": "generate_scene_plan"}).json()["scenes"]
+    assert scenes
+    context = client.get(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/context").json()
+    # 场景计划后所有场景的 Beat 必须为空（前端据此自动触发模型节拍计划）。
+    assert all(not s["beats"] for s in context["scenes"])
+    # generate_beat_plan 之后才有 Beat，且不使用通用功能名。
+    scene_id = scenes[0]["id"]
+    beats = client.post(f"/api/v1/stories/{story_id}/chapters/{chapter['id']}/scenes/{scene_id}/generations", json={"action": "generate_beat_plan"}).json()["beats"]
+    assert beats
+    assert not any(b["name"].startswith("场景进入") or b["name"].startswith("冲突升级") for b in beats)
+
+
 def test_scene_beat_update_with_version_conflict(client, monkeypatch):
     monkeypatch.setattr("app.planning.workspace_service.build_adapters", lambda: {"deepseek": FakeModelAdapter(SCENE_PLAN_JSON)})
     story_id, chapter = _setup_chapter_plan(client, monkeypatch)
