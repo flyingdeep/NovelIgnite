@@ -1672,12 +1672,17 @@ function bookCharsPerPage() {
   // 实际书页尺寸：1320×930，右半页宽 660px
   const w = 660, h = 930;                  // 书页右半页视觉尺寸
   const padX = 124, padTop = 104, padBottom = 70;   // 左右内边距合计、上下内边距
-  const fontSize = bookSettings.fontSize || 19;
+  const fontSize = bookSettings.fontSize || 16;
   const lineHeight = bookSettings.lineHeight || 1.8;
-  const lineH = Math.max(16, Math.round(fontSize * lineHeight));
-  const charsPerLine = Math.max(8, Math.floor((w - padX) / fontSize));
+  const lineH = Math.max(20, Math.round(fontSize * lineHeight));
+  const charsPerLine = Math.max(10, Math.floor((w - padX) / fontSize));
   const linesPerPage = Math.max(5, Math.floor((h - padTop - padBottom) / lineH));
-  return charsPerLine * linesPerPage;
+  
+  // 考虑标题占用，预留4行空间
+  const usableLines = Math.max(4, linesPerPage - 4);
+  
+  // 使用85%容量，平衡填充率和安全性
+  return Math.floor(charsPerLine * usableLines * 0.85);
 }
 
 function bookThemeClass() {
