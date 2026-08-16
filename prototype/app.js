@@ -409,9 +409,9 @@ const SCREEN_LOCK_HINTS = {
   blueprint: "该步骤尚未解锁：请先确认概念，蓝图才会解锁。",
   chapters: "该步骤尚未解锁：请先确认蓝图，章节规划才会解锁。",
   workspace: "该步骤尚未解锁：请先生成章节计划，工作台才会解锁。",
-  read: "该步骤尚未解锁：请按章节顺序推进写作，阅读模式在全书完成后解锁。",
-  cover: "该步骤尚未解锁：封面与插画在阅读模式生成后才能使用（可跳过）。",
-  book: "该步骤尚未解锁：实体书模式在阅读模式生成后才能使用。",
+  read: "该步骤尚未解锁：请按章节顺序推进写作，预览模式在全书完成后解锁。",
+  cover: "该步骤尚未解锁：封面与插画在预览模式生成后才能使用（可跳过）。",
+  book: "该步骤尚未解锁：实体书模式在预览模式生成后才能使用。",
 };
 const API_BASE = "/api/v1";
 let apiAvailable = false;
@@ -1499,10 +1499,11 @@ async function loadReaderForCurrentStory() {
     readerData = await apiRequest(`/stories/${book.id}/read`, { timeoutMs: 60000 });
     const chapters = readerData.chapters || [];
     if (!chapters.length || !chapters.some((c) => (c.scenes || []).some((s) => (s.beats || []).length))) {
-      content.innerHTML = `<div class="reader-empty"><h3>尚无正文可读</h3><p>完成章节写作并确认 Chapter Delta 后，正文会在此以连贯小说呈现。</p></div>`;
+      content.innerHTML = `<div class="reader-empty"><h3>尚无正文可预览</h3><p>完成章节写作并确认 Chapter Delta 后，正文会在此以连贯小说呈现。</p></div>`;
       renderReaderToc(chapters);
       document.querySelector("#read-status").textContent = "写作中 · 尚未完结";
       document.querySelector("#read-status").className = "tag";
+      applyReaderSettingsUi();
       return;
     }
     // First chapter with any prose becomes the initial view.
@@ -1511,11 +1512,12 @@ async function loadReaderForCurrentStory() {
     readerActiveScene = null;
     renderReaderToc(chapters);
     renderReaderChapter(firstWithProse);
+    applyReaderSettingsUi();
     const done = chapters.length && chapters.every((c) => c.access_status === "completed");
     document.querySelector("#read-status").textContent = done ? "已完成 · 全书完结" : "写作中 · 部分完成";
     document.querySelector("#read-status").className = done ? "tag blue" : "tag";
   } catch (error) {
-    content.innerHTML = `<div class="reader-empty"><h3>阅读内容加载失败</h3><p>请稍后重试。</p></div>`;
+    content.innerHTML = `<div class="reader-empty"><h3>预览内容加载失败</h3><p>请稍后重试。</p></div>`;
   }
 }
 
@@ -1560,7 +1562,7 @@ function renderReaderChapter(chapter) {
     el.classList.toggle("active", link && link.dataset.readChapter === chapter.id);
   });
   if (!writtenScenes.length) {
-    content.innerHTML = `<div class="reader-empty"><h3>本章暂无正文</h3><p>完成本章写作并确认 Delta 后即可阅读。</p></div>`;
+    content.innerHTML = `<div class="reader-empty"><h3>本章暂无正文</h3><p>完成本章写作并确认 Delta 后即可预览。</p></div>`;
     return;
   }
   const scenesHtml = allScenes.map((scene) => {
@@ -1627,6 +1629,38 @@ function loadBookSettings() {
 
 function saveBookSettings() {
   try { localStorage.setItem("novel-ignite:book-settings", JSON.stringify(bookSettings)); } catch (e) { /* ignore */ }
+}
+
+// 预览（步骤 6）阅读设置：字号 / 行距 / 字体，独立于实体书设置持久化。
+const READER_DEFAULT_SETTINGS = { fontSize: 16, lineHeight: 1.9, fontFamily: "serif" };
+let readerSettings = { ...READER_DEFAULT_SETTINGS };
+
+function loadReaderSettings() {
+  try {
+    const raw = localStorage.getItem("novel-ignite:reader-settings");
+    if (raw) readerSettings = { ...READER_DEFAULT_SETTINGS, ...JSON.parse(raw) };
+  } catch (e) { readerSettings = { ...READER_DEFAULT_SETTINGS }; }
+}
+
+function saveReaderSettings() {
+  try { localStorage.setItem("novel-ignite:reader-settings", JSON.stringify(readerSettings)); } catch (e) { /* ignore */ }
+}
+
+function applyReaderSettingsUi() {
+  const root = document.querySelector(".reader-grid");
+  if (!root) return;
+  root.style.setProperty("--rd-font-size", readerSettings.fontSize + "px");
+  root.style.setProperty("--rd-line-height", String(readerSettings.lineHeight));
+  root.style.setProperty("--rd-font-family", {
+    serif: '"Songti SC","Noto Serif SC",serif',
+    kai: '"KaiTi","STKaiti",serif',
+    fang: '"FangSong","STFangsong",serif',
+    hei: '"Heiti SC","Microsoft YaHei",sans-serif',
+  }[readerSettings.fontFamily] || "serif");
+  document.querySelectorAll("#reader-settings .book-opt-group").forEach((group) => {
+    const key = group.dataset.setting;
+    group.querySelectorAll("button").forEach((btn) => btn.classList.toggle("active", String(btn.dataset.v) === String(readerSettings[key])));
+  });
 }
 
 // 按字符容量分页：章首页 / 正文页。
@@ -1705,6 +1739,9 @@ function paginateNovel(chapters) {
     }
   }
   flush();
+  // 实体书按「对开页」呈现：一次翻页前进两页（一个书叶）。页数为偶数时补一张空白尾页，
+  // 保证最后一页正文始终能落在右页被读到（对应真实书籍的封底空白页）。
+  if (pages.length % 2 === 0) pages.push({ kind: "blank", chapterNo: 0, chapterTitle: "", sceneTitle: "", sceneSub: "", text: "" });
   return pages;
 }
 
@@ -1732,6 +1769,7 @@ function bookThemeClass() {
 function pageHtml(page) {
   const theme = bookThemeClass();
   if (!page) return `<div class="sheet-page ${theme} book-blank"><p>（空白页）</p></div>`;
+  if (page.kind === "blank") return `<div class="sheet-page ${theme} book-blank"></div>`;
   if (page.kind === "chapter") {
     return `<div class="sheet-page ${theme} chapter-page"><p class="page-chapter-no">第 ${page.chapterNo} 章</p><h1>${escapeHtml(page.chapterTitle || "")}</h1></div>`;
   }
@@ -1764,7 +1802,8 @@ function bookTurnNext() {
   // 视觉翻页：正文立即刷新，只在右下角显示纸角翻起与阴影，避免整页文字翻转造成重影。
   flip.innerHTML = `<div class="flip-corner"></div>`;
   flip.classList.add("flip-next");
-  bookIndex += 1;
+  // 实体书翻页：一次翻过一页（原右页翻到左、新页顶替右），前进两个页面
+  bookIndex += 2;
   renderBookOpen();
   updateBookIndicator();
   requestAnimationFrame(() => flip.classList.add("turning"));
@@ -1772,13 +1811,14 @@ function bookTurnNext() {
 }
 
 function bookTurnPrev() {
-  if (bookTurning || bookIndex <= 0) return;
+  if (bookTurning || bookIndex < 2) return;
   bookTurning = true;
   const flip = document.querySelector("#book-flip");
   // 同样只保留左侧纸角翻起的视觉残留，不复制或翻转正文文字。
   flip.innerHTML = `<div class="flip-corner"></div>`;
   flip.classList.add("flip-prev");
-  bookIndex -= 1;
+  // 后退同样一次翻两个页面
+  bookIndex -= 2;
   renderBookOpen();
   updateBookIndicator();
   requestAnimationFrame(() => flip.classList.add("turning"));
@@ -2082,7 +2122,7 @@ function bindWorkspaceEvents() {
         currentActiveChapterId = null;
         currentWorkspaceContext = null;
         showScreen("read");
-        toast("🎉 全书已完成！进入阅读模式查看完整小说。");
+        toast("🎉 全书已完成！进入预览模式查看完整小说。");
       }
     } catch (error) {
       const detail = error && error.message;
@@ -2276,6 +2316,16 @@ function bindEvents() {
     bookSettings[key] = key === "fontSize" || key === "lineHeight" ? Number(btn.dataset.v) : btn.dataset.v;
     saveBookSettings();
     applyBookSettingsUi();
+  });
+  // 预览（步骤 6）阅读设置：字号 / 行距 / 字体
+  document.querySelector("#reader-settings").addEventListener("click", (event) => {
+    const btn = event.target.closest(".book-opt-group button");
+    if (!btn) return;
+    const group = btn.closest(".book-opt-group");
+    const key = group.dataset.setting;
+    readerSettings[key] = key === "fontSize" || key === "lineHeight" ? Number(btn.dataset.v) : btn.dataset.v;
+    saveReaderSettings();
+    applyReaderSettingsUi();
   });
   // 键盘左右翻页（仅实体书页激活时）
   document.addEventListener("keydown", (event) => {
@@ -2627,6 +2677,8 @@ async function bootstrap() {
   renderIdea();
   updateTopState();
   loadBookSettings();
+  loadReaderSettings();
+  applyReaderSettingsUi();
   bindEvents();
 }
 

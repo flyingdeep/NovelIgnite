@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>Novel Ignite · MVP 交互原型</title>
-  <link rel="stylesheet" href="styles.css?v=20260816at">
+  <link rel="stylesheet" href="styles.css?v=20260816au">
   <style>
     /* Paper book critical layout: kept inline so legacy stylesheet rules cannot collapse it. */
     #book .paper-book{position:relative;width:1320px!important;height:930px!important;max-width:none!important;perspective:1400px;font-size:var(--bs-font-size,19px);line-height:var(--bs-line-height,1.8);font-family:var(--bs-font-family,"Songti SC",serif);user-select:none;background:#151a21}
@@ -57,7 +57,7 @@
       <button class="step flow-step" type="button" data-nav="blueprint"><span>3</span><b>蓝图</b></button><i class="flow-arrow">→</i>
       <button class="step flow-step" type="button" data-nav="chapters"><span>4</span><b>章节</b></button><i class="flow-arrow">→</i>
       <button class="step flow-step" type="button" data-nav="workspace"><span>5</span><b>工作台</b></button><i class="flow-arrow">→</i>
-      <button class="step flow-step" type="button" data-nav="read"><span>6</span><b>阅读</b></button><i class="flow-arrow">→</i>
+      <button class="step flow-step" type="button" data-nav="read"><span>6</span><b>预览</b></button><i class="flow-arrow">→</i>
       <button class="step flow-step" type="button" data-nav="cover" data-skip="1" title="可跳过，可随时补充"><span>7</span><b>封面</b></button><i class="flow-arrow">→</i>
       <button class="step flow-step" type="button" data-nav="book"><span>8</span><b>实体书</b></button>
     </nav>
@@ -111,7 +111,12 @@
         </section>
 
         <section class="screen" id="read">
-          <div class="read-heading"><div><p class="eyebrow">STEP 06 · NOVEL READER</p><div class="title-with-actions"><h1 id="read-title">小说阅读</h1><span id="read-status" class="tag blue">已完成 · 全书完结</span><button class="config-button" type="button" data-config>⚙ 生成设置</button></div><p>连贯阅读完整小说。左侧为章节列表，右侧为正文；Scene 作为「节」导航。</p></div></div>
+          <div class="read-heading"><div><p class="eyebrow">STEP 06 · NOVEL PREVIEW</p><div class="title-with-actions"><h1 id="read-title">小说预览</h1><span id="read-status" class="tag blue">已完成 · 全书完结</span><button class="config-button" type="button" data-config>⚙ 生成设置</button></div><p>连贯预览完整小说。左侧为章节列表，右侧为正文；Scene 作为「节」导航，下方可调整字号、行距与字体。</p></div></div>
+          <div class="reader-settings panel" id="reader-settings">
+            <div class="book-setting-row"><span>字号</span><div class="book-opt-group" data-setting="fontSize"><button type="button" data-v="14">小</button><button type="button" data-v="16" class="active">中</button><button type="button" data-v="18">大</button><button type="button" data-v="20">特大</button></div></div>
+            <div class="book-setting-row"><span>行距</span><div class="book-opt-group" data-setting="lineHeight"><button type="button" data-v="1.7">紧凑</button><button type="button" data-v="1.9" class="active">标准</button><button type="button" data-v="2.2">宽松</button></div></div>
+            <div class="book-setting-row"><span>字体</span><div class="book-opt-group" data-setting="fontFamily"><button type="button" data-v="serif" class="active">宋体</button><button type="button" data-v="kai">楷体</button><button type="button" data-v="fang">仿宋</button><button type="button" data-v="hei">黑体</button></div></div>
+          </div>
           <div class="reader-grid">
             <aside class="reader-toc panel">
               <div class="reader-toc-head"><p>目录</p><b id="reader-chapter-count"></b></div>
@@ -135,7 +140,7 @@
             <aside class="cover-note panel">
               <h3>封面与插画 · 已预留</h3>
               <p>此步骤已留出空位，暂未接入生成能力。后续将支持：AI 生成封面、章节插画、书脊与封底排版。</p>
-              <p>当前展示书名占位封面。可在完成阅读后随时回到此处补充，不影响创作闭环。</p>
+              <p>当前展示书名占位封面。可在完成预览后随时回到此处补充，不影响创作闭环。</p>
               <div class="cover-hint"><span>◈</span><b>设计约束：</b>封面与插画仅作展示与导出版，不会进入正文或设定上下文。</div>
             </aside>
           </div>
@@ -205,6 +210,6 @@
     </div>
   </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="app.js?v=20260816az"></script>
+  <script src="app.js?v=20260816ba"></script>
 </body>
 </html>
