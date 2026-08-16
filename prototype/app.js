@@ -1669,10 +1669,13 @@ function paginateNovel(chapters) {
 }
 
 function bookCharsPerPage() {
-  const w = 440, h = 620;                 // 书页视觉尺寸
-  const padX = 108, padTop = 96, padBottom = 56;   // 左右内边距合计、上下内边距
-  const lineH = Math.max(16, Math.round(bookSettings.fontSize * bookSettings.lineHeight));
-  const charsPerLine = Math.max(8, Math.floor((w - padX) / bookSettings.fontSize));
+  // 实际书页尺寸：1320×930，右半页宽 660px
+  const w = 660, h = 930;                  // 书页右半页视觉尺寸
+  const padX = 124, padTop = 104, padBottom = 70;   // 左右内边距合计、上下内边距
+  const fontSize = bookSettings.fontSize || 19;
+  const lineHeight = bookSettings.lineHeight || 1.8;
+  const lineH = Math.max(16, Math.round(fontSize * lineHeight));
+  const charsPerLine = Math.max(8, Math.floor((w - padX) / fontSize));
   const linesPerPage = Math.max(5, Math.floor((h - padTop - padBottom) / lineH));
   return charsPerLine * linesPerPage;
 }
