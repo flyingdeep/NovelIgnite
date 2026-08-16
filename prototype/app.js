@@ -320,10 +320,10 @@ const blueprintData = {
 };
 
 const books = [
-  { id: "b1", title: "记忆拍卖场", subtitle: "科幻 · 悬疑 · 中篇", status: "inprogress", progress: "第 2 章 / 12 章", cover: ["#4d8dff", "#14243f"], updated: "2 小时前", stage: "writing", idea: "在记忆可以交易的近未来，一位失忆的鉴定师发现自己的过去正被分批拍卖。他必须潜入地下记忆市场，在找回真相与保护现在的自我之间做出选择。" },
-  { id: "b2", title: "雾中灯塔", subtitle: "情感 · 成长 · 短篇", status: "completed", progress: "已完成 · 8 章", cover: ["#50d6a1", "#0f352b"], updated: "3 天前", stage: "done", idea: "守塔人独自守护着海湾的灯塔，直到某天灯塔发出了一封写给多年后自己的信。" },
-  { id: "b3", title: "废墟图书馆", subtitle: "奇幻 · 冒险 · 长篇", status: "inprogress", progress: "第 7 章 / 40 章", cover: ["#ac84ff", "#2b1d4d"], updated: "昨天", stage: "writing", idea: "世界的图书馆沉入废墟，最后一位图书管理员必须修复知识的种子。" },
-  { id: "b4", title: "第七档案室", subtitle: "悬疑 · 惊悚 · 中篇", status: "inprogress", progress: "第 1 章 / 15 章", cover: ["#f2bc61", "#3d2c13"], updated: "刚刚", stage: "writing", idea: "编号第七的档案室里，每一份档案都封印着一段被删除的现实。" }
+  { id: "b1", title: "记忆拍卖场", subtitle: "科幻 · 悬疑 · 中篇", status: "inprogress", progress: "第 2 章 / 12 章", cover: ["#4d8dff", "#14243f"], updated: "2 小时前", stage: "writing", idea: "" },
+  { id: "b2", title: "雾中灯塔", subtitle: "情感 · 成长 · 短篇", status: "completed", progress: "已完成 · 8 章", cover: ["#50d6a1", "#0f352b"], updated: "3 天前", stage: "done", idea: "" },
+  { id: "b3", title: "废墟图书馆", subtitle: "奇幻 · 冒险 · 长篇", status: "inprogress", progress: "第 7 章 / 40 章", cover: ["#ac84ff", "#2b1d4d"], updated: "昨天", stage: "writing", idea: "" },
+  { id: "b4", title: "第七档案室", subtitle: "悬疑 · 惊悚 · 中篇", status: "inprogress", progress: "第 1 章 / 15 章", cover: ["#f2bc61", "#3d2c13"], updated: "刚刚", stage: "writing", idea: "" }
 ];
 
 const chapters = [
@@ -509,13 +509,25 @@ function getCoverColors(bookIndex) {
 }
 
 function apiWorkToBook(work, index) {
+  // 根据后端返回的cover_color，从预设主题中匹配对应的渐变颜色
+  let cover = null;
+  for (const [top, bot] of COVER_THEMES) {
+    if (work.cover_color === bot) {
+      cover = [top, bot];
+      break;
+    }
+  }
+  if (!cover) {
+    // 如果后端没有设置或使用了默认颜色，使用索引匹配主题
+    cover = COVER_THEMES[index % COVER_THEMES.length];
+  }
   return {
     id: work.id,
     title: work.title,
     subtitle: work.stage === "idea" ? "尚未分类 · 待生成" : "创作中 · 进行中",
     status: work.stage === "done" ? "completed" : "inprogress",
     progress: work.progress_text,
-    cover: work.cover_color ? [work.cover_color, "#141f33"] : getCoverColors(index),
+    cover,
     updated: work.updated_at ? new Date(work.updated_at).toLocaleString("zh-CN") : "刚刚",
     stage: work.stage,
     idea: work.idea_text || "",

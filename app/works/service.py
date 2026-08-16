@@ -1,5 +1,6 @@
 """Works application service."""
 from datetime import datetime, timezone
+from random import choice
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -7,6 +8,18 @@ from sqlalchemy.orm import Session
 
 from app.works.models import AIConfig, Story
 from app.works.schemas import AIConfigUpdate, IdeaUpdate, TitleUpdate, WorkCreate
+
+# 预设封面颜色主题，每本书自动分配不同颜色
+COVER_THEMES = [
+    ("#4d8dff", "#14243f"),  # 蓝
+    ("#ac84ff", "#2b1d4d"),  # 紫
+    ("#50d6a1", "#0f352b"),  # 绿
+    ("#f2bc61", "#3d2c13"),  # 金
+    ("#ff8092", "#3d1520"),  # 红
+    ("#65d5f3", "#0d2f3d"),  # 青
+    ("#ffd700", "#2a1f00"),  # 金橙
+    ("#98fb98", "#1a3a1a"),  # 嫩绿
+]
 
 
 def list_stories(db: Session) -> list[Story]:
@@ -21,7 +34,9 @@ def get_story_or_404(db: Session, story_id: str) -> Story:
 
 
 def create_story(db: Session, data: WorkCreate) -> Story:
-    story = Story(title=data.title)
+    # 自动分配封面颜色（使用主色调）
+    _, bot_color = choice(COVER_THEMES)
+    story = Story(title=data.title, cover_color=bot_color)
     db.add(story)
     db.flush()
     db.add(AIConfig(story_id=story.id))
