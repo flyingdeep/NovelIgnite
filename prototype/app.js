@@ -492,14 +492,30 @@ function generationFailToast(error, fallback) {
   else toast(fallback);
 }
 
-function apiWorkToBook(work) {
+const BOOK_COVER_THEMES = [
+  { top: "#4d8dff", bot: "#14243f" },  // 蓝
+  { top: "#ac84ff", bot: "#2b1d4d" },  // 紫
+  { top: "#50d6a1", bot: "#0f352b" },  // 绿
+  { top: "#f2bc61", bot: "#3d2c13" },  // 金
+  { top: "#ff8092", bot: "#3d1520" },  // 红
+  { top: "#65d5f3", bot: "#0d2f3d" },  // 青
+  { top: "#ffd700", bot: "#2a1f00" },  // 金橙
+  { top: "#98fb98", bot: "#1a3a1a" },  // 嫩绿
+];
+
+function getCoverColors(bookIndex) {
+  const colors = BOOK_COVER_THEMES[bookIndex % BOOK_COVER_THEMES.length];
+  return [colors.top, colors.bot];
+}
+
+function apiWorkToBook(work, index) {
   return {
     id: work.id,
     title: work.title,
     subtitle: work.stage === "idea" ? "尚未分类 · 待生成" : "创作中 · 进行中",
     status: work.stage === "done" ? "completed" : "inprogress",
     progress: work.progress_text,
-    cover: [work.cover_color || "#3f6db5", "#141f33"],
+    cover: work.cover_color ? [work.cover_color, "#141f33"] : getCoverColors(index),
     updated: work.updated_at ? new Date(work.updated_at).toLocaleString("zh-CN") : "刚刚",
     stage: work.stage,
     idea: work.idea_text || "",
@@ -510,7 +526,7 @@ function apiWorkToBook(work) {
 async function loadWorksFromApi() {
   try {
     const works = await apiRequest("/works");
-    books.splice(0, books.length, ...works.map(apiWorkToBook));
+    books.splice(0, books.length, ...works.map((work, i) => apiWorkToBook(work, i)));
     apiAvailable = true;
   } catch (error) {
     apiAvailable = false;
@@ -906,10 +922,10 @@ function renderBooks() {
     grid.innerHTML = `<div class="books-empty"><h3>还没有作品</h3><p>点击“新建故事”，从一句创作意图开始。</p><button class="primary-button" type="button" id="new-book">＋ 新建故事</button></div>`;
     return;
   }
-  grid.innerHTML = books.map((book) => `
+  grid.innerHTML = books.map((book, i) => `
     <article class="book-card" data-id="${book.id}">
       <button class="book-cover ${book.status}" type="button" data-open="${book.id}" style="background:linear-gradient(160deg, ${book.cover[0]} 0%, ${book.cover[1]} 78%)">
-        <span class="book-spine"></span>
+        <span class="cover-texture"></span>
         <span class="book-status ${book.status}">${book.status === "completed" ? "✓ 已完成" : "● 进行中"}</span>
         <span class="book-title">${book.title}</span>
         <span class="book-subtitle">${book.stage === "idea" ? "尚未分类 · 待生成" : "创作中 · 进行中"}</span>
