@@ -938,6 +938,8 @@ function renderBooks() {
     <article class="book-card" data-id="${book.id}">
       <button class="book-cover ${book.status}" type="button" data-open="${book.id}" style="background:linear-gradient(160deg, ${book.cover[0]} 0%, ${book.cover[1]} 78%)">
         <span class="cover-texture"></span>
+        <span class="cover-line"></span>
+        <span class="cover-line"></span>
         <span class="book-status ${book.status}">${book.status === "completed" ? "✓ 已完成" : "● 进行中"}</span>
         <span class="book-title">${book.title}</span>
         <span class="book-subtitle">${book.stage === "idea" ? "尚未分类 · 待生成" : "创作中 · 进行中"}</span>
