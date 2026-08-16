@@ -117,7 +117,9 @@ def build_focused_blueprint_context(db: Session, story_id: str, *, pov: str = ""
                 continue
             name = str(e.get("name") or "")
             role = str(e.get("role") or "")
-            text = name + role + "".join(str(v) for v in (e.get("fields") or {}).values())
+            # 历史数据可能存字符串 fields（旧模型输出），规范化后再参与过滤，避免崩溃
+            fields = _normalize_fields(e.get("fields"))
+            text = name + role + "".join(str(v) for v in fields.values())
             if location and location in text:
                 wentries.append(e)
                 continue

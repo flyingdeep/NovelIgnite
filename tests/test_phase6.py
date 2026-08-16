@@ -578,6 +578,44 @@ def test_focused_blueprint_context_filters_by_location(tmp_path):
     db.close()
 
 
+def test_focused_blueprint_context_handles_string_fields(tmp_path):
+    """历史数据 fields 为字符串时（旧模型输出），聚焦蓝图上下文构建不得崩溃。"""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.infrastructure.database import Base
+    from app.works.blueprint_service import build_focused_blueprint_context
+    from app.works.models import Story, StoryArtifact
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'stringfields.db'}", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    story = Story(title="字符串字段测试", idea_text="主角追踪线索。")
+    db.add(story)
+    db.flush()
+    sid = story.id
+
+    def art(kind, payload):
+        db.add(StoryArtifact(story_id=sid, kind=kind, layer="baseline", payload=json.dumps(payload, ensure_ascii=False), status="confirmed", version=1, locked_paths="[]"))
+
+    art("concept", {"summary": "追查线索。", "length": "中篇"})
+    # 历史数据：fields 是单个字符串（旧 qwen 输出），不是 {label: value} 对象
+    art("characters", {"entries": [
+        {"name": "林墨", "role": "主角", "fields": "性格谨慎；职业身份为调查员；动机查明真相"},
+    ]})
+    art("world", {"entries": [
+        {"name": "暗流码头", "role": "调查主场景", "fields": "描述废旧码头；规则夜间封闭"},
+    ]})
+    db.commit()
+
+    ctx = build_focused_blueprint_context(db, sid, pov="林墨", location="暗流码头")
+    assert "林墨" in ctx
+    assert "性格谨慎" in ctx or "性格" in ctx
+    assert "调查员" in ctx
+    assert "暗流码头" in ctx
+    db.close()
+
+
 def test_prose_messages_include_state_card_and_emotion(client, monkeypatch):
     """B·正文上下文包含即时状态卡与场景情绪走向（连贯锚点）。"""
     adapter = DispatchAdapter({
