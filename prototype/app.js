@@ -1632,7 +1632,9 @@ function paginateNovel(chapters) {
       for (const b of beats) {
         const paras = String(b.markdown || "").split(/\n+/)
           .map((s) => s.trim())
-          .map((s) => s.replace(/^#{1,6}\s*/, "").replace(/^\>+\s?/, "").replace(/\*\*(.+?)\*\*/g, "$1").replace(/\*(.+?)\*/g, "$1"))
+          // 剔除 markdown 标题行（页头已显示场景标题，避免「同一标题出现两次」）
+          .filter((s) => s && !/^#{1,6}\s+/.test(s))
+          .map((s) => s.replace(/^\>+\s?/, "").replace(/\*\*(.+?)\*\*/g, "$1").replace(/\*(.+?)\*/g, "$1"))
           .filter(Boolean);
         for (const raw of paras) {
           if (!sceneHeadDone) {
