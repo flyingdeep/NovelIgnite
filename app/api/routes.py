@@ -115,7 +115,7 @@ def get_models():
 
 @router.get("/models/availability", response_model=list[ModelAvailabilityResponse])
 def get_models_availability():
-    """模型可用性异步探测：Ollama 真实网络探测（远程服务器可能关机），其余按 API Key 是否配置。"""
+    """模型可用性异步探测：llama.cpp 真实网络探测（远程服务器可能关机），其余按 API Key 是否配置。"""
     from app.infrastructure.model_adapter import check_model_availability
 
     return [ModelAvailabilityResponse(**check_model_availability(s)) for s in configured_model_specs()]

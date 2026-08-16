@@ -59,12 +59,12 @@ py -3.13 -m uvicorn app.main:app --reload
 | Agnes | `https://apihub.agnes-ai.com/v1` | `agnes-2.5-flash` | `AGNES_API_KEY` | 支持 `response_format`；思考模式经 `chat_template_kwargs.enable_thinking` 开启 |
 | DeepSeek | `https://api.deepseek.com/v1` | `deepseek-v4-flash` | `DEEPSEEK_API_KEY` | 可尝试 JSON 模式；思考模式默认开启，`extra_body.thinking` + 顶层 `reasoning_effort` |
 | Grok | `https://modelflare.dev/v1` | `grok-4.5` | `GROK_API_KEY` | 不发送 `response_format`，自动容错解析；推理内置，顶层 `reasoning_effort` |
-| Ollama（远端） | `http://106.75.216.144:11434/v1` | `huihui_aiQwen3.6-abliterated-27b:latest` | `OLLAMA_API_KEY`（可选，通常无鉴权） | 支持 `response_format`；Qwen3 推理默认开启，顶层 `reasoning_effort`；**始终以流式请求**（绕开公网链路对非流式长请求的 ~60s 空闲断连） |
+| llama.cpp（远端） | `http://106.75.216.144:57321/v1` | `qwen3.6-35b-a3b` | `LLAMACPP_API_KEY`（可选，通常无鉴权） | 支持 `response_format`；Qwen3.6 推理经 `chat_template_kwargs.enable_thinking` 开关（low 关闭）；**始终以流式请求**（绕开公网链路对非流式长请求的 ~60s 空闲断连） |
 
-- 推理强度（low/medium/high）按各模型官方文档传递：DeepSeek 顶层 `reasoning_effort`（medium 映射 high）、Agnes `chat_template_kwargs.enable_thinking`、Grok 顶层 `reasoning_effort`、Ollama（Qwen3）顶层 `reasoning_effort`（推理默认开启）。
-- 各模型最大输出按官方上限：Agnes 2.5 65.5K / DeepSeek v4-flash 384K / Grok 4.5 500K / Ollama 65.5K；生成调用默认使用该上限。
-- **模型可用性异步探测**：`GET /api/v1/models/availability` 返回每个模型的可用状态——Ollama 做真实网络探测（`GET {base}/models`，服务器离线则 `available=false`），其余按 API Key 是否配置判断；前端页面加载时异步调用，**不可用模型在生成设置下拉中置为禁用**（Ollama 离线时显示「离线 · 不可用」）。
-- Ollama 单次请求超时 300s（远端 27B 推理较慢），其余模型沿用全局超时；Ollama 无鉴权，始终构建适配器（是否可用由探测决定）。
+- 推理强度（low/medium/high）按各模型官方文档传递：DeepSeek 顶层 `reasoning_effort`（medium 映射 high）、Agnes `chat_template_kwargs.enable_thinking`、Grok 顶层 `reasoning_effort`、llama.cpp（Qwen3.6）`chat_template_kwargs.enable_thinking`（low 视为关闭思考）。
+- 各模型最大输出按官方上限：Agnes 2.5 65.5K / DeepSeek v4-flash 384K / Grok 4.5 500K / llama.cpp 8K（服务器 ctx 16K，为输入留余量）；生成调用默认使用该上限。
+- **模型可用性异步探测**：`GET /api/v1/models/availability` 返回每个模型的可用状态——llama.cpp 做真实网络探测（`GET {base}/models`，服务器离线则 `available=false`），其余按 API Key 是否配置判断；前端页面加载时异步调用，**不可用模型在生成设置下拉中置为禁用**（llama.cpp 离线时显示「离线 · 不可用」）。
+- llama.cpp 单次请求超时 300s（远端单并发 + 思考占用时间较长），其余模型沿用全局超时；llama.cpp 无鉴权，始终构建适配器（是否可用由探测决定）。
 
 - `.env` 只在服务端读取，不能提交到 Git。
 - 模型、Temperature 和推理强度可以通过作品级 AI 配置保存。

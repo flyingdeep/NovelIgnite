@@ -1133,7 +1133,7 @@ function populateModelSelect(notify = false) {
         { provider: "deepseek", name: "DeepSeek V4 Flash", available: true },
         { provider: "agnes", name: "Agnes 2.5 Flash", available: true },
         { provider: "grok", name: "Grok 4.5", available: true },
-        { provider: "ollama", name: "Qwen3.6 Abliterated 27B (Ollama)", available: true },
+        { provider: "llamacpp", name: "Qwen3.6 35B A3B (llama.cpp)", available: true },
       ];
   select.replaceChildren(...specs.map((m) => {
     const opt = document.createElement("option");
@@ -2577,7 +2577,7 @@ function renderModels() {
     ["deepseek", "DeepSeek V4 Flash", "适合快速结构化规划与正文生成", "https://api.deepseek.com"],
     ["agnes", "Agnes 2.5 Flash", "适合结构化候选与一致性检查", "https://apihub.agnes-ai.com"],
     ["grok", "Grok 4.5", "适合高探索性候选与复杂推理", "https://modelflare.dev"],
-    ["ollama", "Qwen3.6 Abliterated 27B (Ollama)", "远端 Ollama · 推理默认开启，适合高探索性创作", "http://106.75.216.144:11434"],
+    ["llamacpp", "Qwen3.6 35B A3B (llama.cpp)", "远端 llama.cpp · 推理可开关，适合高探索性创作", "http://106.75.216.144:57321"],
   ];
   const profiles = Object.fromEntries((modelPromptProfiles || []).map((p) => [p.provider, p]));
   document.querySelector("#model-cards").innerHTML = models.map(([provider, name, description, endpoint]) => {
@@ -2617,7 +2617,7 @@ async function bootstrap() {
     apiAvailable = false;
   }
   
-  loadModelAvailability(); // 异步探测模型可用性（Ollama 远程服务器可能离线），不可用模型会置为禁用
+  loadModelAvailability(); // 异步探测模型可用性（远程服务器可能离线），不可用模型会置为禁用
   renderBlueprint();
   renderBooks();
   renderChapters();

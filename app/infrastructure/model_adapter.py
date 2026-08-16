@@ -23,10 +23,11 @@ class ModelSpec:
     #   "deepseek": extra_body.thinking={type:enabled} + 顶层 reasoning_effort(low/high/max)；medium 映射为 high
     #   "agnes":    extra_body.chat_template_kwargs={enable_thinking: true/false}
     #   "grok":     顶层 reasoning_effort(low/medium/high)，推理无法关闭
+    #   "llamacpp": extra_body.chat_template_kwargs={enable_thinking: true/false}（Qwen3.6，llama.cpp 推理型，low 视为关闭思考）
     thinking: str = "builtin"
     # 官方允许的最大输出 tokens（DeepSeek 384K / Agnes 2.5 65.5K / Grok 4.5 500K）
     max_output_tokens: int = 4096
-    # 单次请求超时（秒）；None 时使用 settings.model_timeout。Ollama 远端模型慢，需更长超时
+    # 单次请求超时（秒）；None 时使用 settings.model_timeout。远端 llama.cpp 模型慢，需更长超时
     timeout: float | None = None
 
 
@@ -34,9 +35,9 @@ MODEL_SPECS = (
     ModelSpec("agnes", "Agnes 2.5 Flash", "agnes-2.5-flash", "https://apihub.agnes-ai.com/v1", "AGNES_API_KEY", True, "agnes", 65536),
     ModelSpec("deepseek", "DeepSeek V4 Flash", "deepseek-v4-flash", "https://api.deepseek.com/v1", "DEEPSEEK_API_KEY", True, "deepseek", 384000),
     ModelSpec("grok", "Grok 4.5", "grok-4.5", "https://modelflare.dev/v1", "GROK_API_KEY", False, "grok", 500000),
-    # 远端 Ollama（通常无鉴权）：Qwen3 系推理默认开启，reasoning_effort 为顶层参数；JSON 模式可用。
-    # timeout=300：远端 27B 推理较慢（思考占用大量时间），默认 150s 会超时
-    ModelSpec("ollama", "Qwen3.6 Abliterated 27B (Ollama)", "huihui_aiQwen3.6-abliterated-27b:latest", "http://106.75.216.144:11434/v1", "OLLAMA_API_KEY", True, "ollama", 65536, timeout=300),
+    # 远端 llama.cpp（通常无鉴权）：Qwen3.6 35B-A3B 推理型，chat_template_kwargs.enable_thinking 控制思考；JSON 模式可用。
+    # 服务器 ctx 16K（16384），max_output_tokens 取 8K 为输入留出余量；timeout=300：单并发排队 + 思考占用时间较长
+    ModelSpec("llamacpp", "Qwen3.6 35B A3B (llama.cpp)", "qwen3.6-35b-a3b", "http://106.75.216.144:57321/v1", "LLAMACPP_API_KEY", True, "llamacpp", 8192, timeout=300),
 )
 
 
@@ -181,9 +182,9 @@ class OpenAICompatibleAdapter:
 
         api_key = os.getenv(self.spec.api_key_env) or getattr(settings, self.spec.api_key_env.lower(), "")
         if not api_key:
-            if self.spec.provider == "ollama":
-                # Ollama 通常无鉴权，OpenAI SDK 需要非空占位
-                api_key = "ollama"
+            if self.spec.provider == "llamacpp":
+                # 远端 llama.cpp 通常无鉴权，OpenAI SDK 需要非空占位
+                api_key = "llamacpp"
             else:
                 raise RuntimeError(f"Missing model API key: {self.spec.api_key_env}")
         if max_tokens is None:
@@ -206,9 +207,9 @@ class OpenAICompatibleAdapter:
         elif self.spec.thinking == "grok":
             # Grok 4.5：推理无法关闭，reasoning_effort 为顶层参数（low/medium/high）
             kwargs["reasoning_effort"] = reasoning_strength
-        elif self.spec.thinking == "ollama":
-            # Qwen3（Ollama）：推理默认开启无法关闭，reasoning_effort 为顶层参数（low/medium/high）
-            kwargs["reasoning_effort"] = reasoning_strength
+        elif self.spec.thinking == "llamacpp":
+            # Qwen3.6（llama.cpp）：通过 chat_template_kwargs.enable_thinking 控制思考；low 视为关闭思考
+            extra_body["chat_template_kwargs"] = {"enable_thinking": reasoning_strength != "low"}
         if extra_body:
             kwargs["extra_body"] = extra_body
         if json_mode and self.spec.supports_json:
@@ -220,8 +221,8 @@ class OpenAICompatibleAdapter:
         for attempt in range(max_attempts):
             attempt_start = time.perf_counter()
             try:
-                if self.spec.provider == "ollama":
-                    # 远端 Ollama 走公网：非流式长请求会被链路空闲超时（约 60s）掐断；
+                if self.spec.provider == "llamacpp":
+                    # 远端 llama.cpp 走公网：非流式长请求会被链路空闲超时（约 60s）掐断；
                     # 改用流式让数据持续流动，绕过链路超时，也利于边生成边返回
                     kwargs["stream"] = True
                     stream = client.chat.completions.create(**kwargs)
@@ -266,8 +267,8 @@ def build_adapters(timeout: float | None = None) -> dict[str, OpenAICompatibleAd
     adapters: dict[str, OpenAICompatibleAdapter] = {}
     for spec in MODEL_SPECS:
         spec_timeout = timeout or spec.timeout or settings.model_timeout
-        if spec.provider == "ollama":
-            # Ollama 通常无鉴权，始终构建（可用性由前端异步探测决定）
+        if spec.provider == "llamacpp":
+            # llama.cpp 通常无鉴权，始终构建（可用性由前端异步探测决定）
             adapters[spec.provider] = OpenAICompatibleAdapter(spec, timeout=spec_timeout)
         elif os.getenv(spec.api_key_env) or getattr(settings, spec.api_key_env.lower(), ""):
             adapters[spec.provider] = OpenAICompatibleAdapter(spec, timeout=spec_timeout)
@@ -278,12 +279,12 @@ def check_model_availability(spec: ModelSpec, timeout: float = 4.0) -> dict[str,
     """探测单个模型当前是否可用（同步实现，由 FastAPI 在线程池执行）。
 
     返回 {provider, name, model, available, reason, latency_ms}：
-    - ollama: 真实 GET {base_url}/models（OpenAI 兼容模型列表）；服务器在线且模型已下载即认为可用，
+    - llamacpp: 真实 GET {base_url}/models（OpenAI 兼容模型列表）；服务器在线且模型已下载即认为可用，
       网络不可达/超时/非 200 均视为不可用（远程服务器可能关机）
     - 其他: 以 API Key 是否配置为准（configured），不发起网络探测，避免拖慢页面加载
     """
     base = {"provider": spec.provider, "name": spec.name, "model": spec.model}
-    if spec.provider != "ollama":
+    if spec.provider != "llamacpp":
         key = os.getenv(spec.api_key_env) or getattr(settings, spec.api_key_env.lower(), "")
         return {**base, "available": bool(key), "reason": "configured" if key else "missing_api_key", "latency_ms": 0.0}
     import httpx

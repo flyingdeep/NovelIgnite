@@ -57,9 +57,9 @@ def _capture_adapter_kwargs(monkeypatch, spec, **complete_kwargs):
 
 def test_models_endpoint_has_four_specs(client):
     models = client.get("/api/v1/models").json()
-    assert {model["provider"] for model in models} == {"agnes", "deepseek", "grok", "ollama"}
+    assert {model["provider"] for model in models} == {"agnes", "deepseek", "grok", "llamacpp"}
     assert next(model for model in models if model["provider"] == "grok")["supports_json"] is False
-    assert next(model for model in models if model["provider"] == "ollama")["supports_json"] is True
+    assert next(model for model in models if model["provider"] == "llamacpp")["supports_json"] is True
 
 
 def test_extract_json_handles_code_fence_and_wrapping():
@@ -82,6 +82,7 @@ def test_model_max_output_tokens_from_official_docs():
     assert limits["agnes"] == 65536  # Agnes 2.5 Flash：最大输出 65.5K
     assert limits["deepseek"] == 384000  # DeepSeek v4-flash：最大输出 384K
     assert limits["grok"] == 500000  # Grok 4.5：500K
+    assert limits["llamacpp"] == 8192  # llama.cpp：服务器 ctx 16K，输出取 8K 留输入余量
 
 
 def test_adapter_uses_spec_max_tokens_by_default(monkeypatch):
@@ -119,48 +120,49 @@ def test_grok_adapter_does_not_send_response_format(monkeypatch):
     assert "response_format" not in captured
 
 
-def test_ollama_spec_registered():
+def test_llamacpp_spec_registered():
     from app.infrastructure.model_adapter import MODEL_SPECS
 
-    ollama = next(spec for spec in MODEL_SPECS if spec.provider == "ollama")
-    assert ollama.name == "Qwen3.6 Abliterated 27B (Ollama)"
-    assert ollama.model == "huihui_aiQwen3.6-abliterated-27b:latest"
-    assert ollama.base_url == "http://106.75.216.144:11434/v1"
-    assert ollama.supports_json is True
-    assert ollama.thinking == "ollama"
-    assert ollama.max_output_tokens >= 65536
+    llamacpp = next(spec for spec in MODEL_SPECS if spec.provider == "llamacpp")
+    assert llamacpp.name == "Qwen3.6 35B A3B (llama.cpp)"
+    assert llamacpp.model == "qwen3.6-35b-a3b"
+    assert llamacpp.base_url == "http://106.75.216.144:57321/v1"
+    assert llamacpp.supports_json is True
+    assert llamacpp.thinking == "llamacpp"
+    assert llamacpp.max_output_tokens == 8192
 
 
-def test_ollama_reasoning_effort_top_level(monkeypatch):
+def test_llamacpp_thinking_params(monkeypatch):
     from app.infrastructure.model_adapter import MODEL_SPECS
 
-    spec = next(s for s in MODEL_SPECS if s.provider == "ollama")
+    spec = next(s for s in MODEL_SPECS if s.provider == "llamacpp")
     captured = _capture_adapter_kwargs(monkeypatch, spec, reasoning_strength="high", json_mode=True)
-    assert captured["reasoning_effort"] == "high"  # Qwen3（Ollama）推理深度为顶层参数
+    assert captured["extra_body"]["chat_template_kwargs"] == {"enable_thinking": True}  # Qwen3.6（llama.cpp）思考经 chat_template_kwargs 控制
     assert captured["response_format"] == {"type": "json_object"}  # 支持 JSON 模式
+    captured_low = _capture_adapter_kwargs(monkeypatch, spec, reasoning_strength="low")
+    assert captured_low["extra_body"]["chat_template_kwargs"] == {"enable_thinking": False}  # low 视为关闭思考
 
 
-def test_ollama_uses_streaming(monkeypatch):
-    """Ollama 走公网链路：必须用流式，绕过非流式长请求的链路空闲超时。"""
+def test_llamacpp_uses_streaming(monkeypatch):
+    """llama.cpp 走公网链路：必须用流式，绕过非流式长请求的链路空闲超时。"""
     from app.infrastructure.model_adapter import MODEL_SPECS
 
-    spec = next(s for s in MODEL_SPECS if s.provider == "ollama")
+    spec = next(s for s in MODEL_SPECS if s.provider == "llamacpp")
     captured = _capture_adapter_kwargs(monkeypatch, spec, reasoning_strength="medium", json_mode=True)
     assert captured["stream"] is True
-    assert captured["reasoning_effort"] == "medium"
     assert captured["response_format"] == {"type": "json_object"}
 
 
-def test_build_adapters_includes_ollama_without_key(monkeypatch):
+def test_build_adapters_includes_llamacpp_without_key(monkeypatch):
     from app.infrastructure.model_adapter import build_adapters
 
-    for var in ("AGNES_API_KEY", "DEEPSEEK_API_KEY", "GROK_API_KEY", "OLLAMA_API_KEY"):
+    for var in ("AGNES_API_KEY", "DEEPSEEK_API_KEY", "GROK_API_KEY", "LLAMACPP_API_KEY"):
         monkeypatch.delenv(var, raising=False)
     adapters = build_adapters()
-    assert "ollama" in adapters  # Ollama 通常无鉴权，始终可用
+    assert "llamacpp" in adapters  # llama.cpp 通常无鉴权，始终可用
 
 
-def test_check_model_availability_ollama_online(monkeypatch):
+def test_check_model_availability_llamacpp_online(monkeypatch):
     import httpx
     from app.infrastructure.model_adapter import MODEL_SPECS, check_model_availability
 
@@ -168,16 +170,16 @@ def test_check_model_availability_ollama_online(monkeypatch):
         status_code = 200
 
         def json(self):
-            return {"data": [{"id": "huihui_aiQwen3.6-abliterated-27b:latest"}]}
+            return {"data": [{"id": "qwen3.6-35b-a3b"}]}
 
     monkeypatch.setattr("httpx.get", lambda url, timeout: Resp())
-    spec = next(s for s in MODEL_SPECS if s.provider == "ollama")
+    spec = next(s for s in MODEL_SPECS if s.provider == "llamacpp")
     r = check_model_availability(spec)
     assert r["available"] is True
     assert r["reason"] == "online"
 
 
-def test_check_model_availability_ollama_offline(monkeypatch):
+def test_check_model_availability_llamacpp_offline(monkeypatch):
     import httpx
     from app.infrastructure.model_adapter import MODEL_SPECS, check_model_availability
 
@@ -185,13 +187,13 @@ def test_check_model_availability_ollama_offline(monkeypatch):
         raise httpx.ConnectError("unreachable")
 
     monkeypatch.setattr("httpx.get", boom)
-    spec = next(s for s in MODEL_SPECS if s.provider == "ollama")
+    spec = next(s for s in MODEL_SPECS if s.provider == "llamacpp")
     r = check_model_availability(spec)
     assert r["available"] is False
     assert r["reason"] == "ConnectError"
 
 
-def test_check_model_availability_non_ollama_uses_configured(monkeypatch):
+def test_check_model_availability_non_llamacpp_uses_configured(monkeypatch):
     from app.infrastructure.model_adapter import MODEL_SPECS, check_model_availability
 
     spec = next(s for s in MODEL_SPECS if s.provider == "deepseek")
