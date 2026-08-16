@@ -24,7 +24,9 @@
       <button class="step flow-step" type="button" data-nav="blueprint"><span>3</span><b>蓝图</b></button><i class="flow-arrow">→</i>
       <button class="step flow-step" type="button" data-nav="chapters"><span>4</span><b>章节</b></button><i class="flow-arrow">→</i>
       <button class="step flow-step" type="button" data-nav="workspace"><span>5</span><b>工作台</b></button><i class="flow-arrow">→</i>
-      <button class="step flow-step" type="button" data-nav="read"><span>6</span><b>阅读</b></button>
+      <button class="step flow-step" type="button" data-nav="read"><span>6</span><b>阅读</b></button><i class="flow-arrow">→</i>
+      <button class="step flow-step" type="button" data-nav="cover" data-skip="1" title="可跳过，可随时补充"><span>7</span><b>封面</b></button><i class="flow-arrow">→</i>
+      <button class="step flow-step" type="button" data-nav="book"><span>8</span><b>实体书</b></button>
     </nav>
 
     <main class="main-area">
@@ -87,6 +89,57 @@
           </div>
         </section>
 
+        <section class="screen" id="cover">
+          <div class="page-heading"><div><p class="eyebrow">STEP 07 · COVER &amp; ILLUSTRATION</p><h1>封面与插画</h1><p>为作品生成封面与章节插画。此步骤可跳过，也可在任意阶段随时补充。</p></div><div class="heading-actions"><span class="tag purple">可跳过 · 可补充</span></div></div>
+          <div class="cover-layout">
+            <div class="cover-preview panel" id="cover-preview">
+              <div class="cover-front">
+                <p class="cover-eyebrow">NOVEL IGNITE</p>
+                <h2 id="cover-title">未命名作品</h2>
+                <p class="cover-author" id="cover-author">封面与插画 · 待生成</p>
+              </div>
+            </div>
+            <aside class="cover-note panel">
+              <h3>封面与插画 · 已预留</h3>
+              <p>此步骤已留出空位，暂未接入生成能力。后续将支持：AI 生成封面、章节插画、书脊与封底排版。</p>
+              <p>当前展示书名占位封面。可在完成阅读后随时回到此处补充，不影响创作闭环。</p>
+              <div class="cover-hint"><span>◈</span><b>设计约束：</b>封面与插画仅作展示与导出版，不会进入正文或设定上下文。</div>
+            </aside>
+          </div>
+        </section>
+
+        <section class="screen" id="book">
+          <div class="book-heading"><div><p class="eyebrow">STEP 08 · PAPER BOOK</p><div class="title-with-actions"><h1 id="book-title">实体书阅读</h1><span id="book-status" class="tag blue">纸书模式</span></div><p>以纸质书的形态逐页阅读。点击书页两侧或方向键翻页，底部可调整字号、行距、字体与纸面。</p></div></div>
+          <div class="book-layout">
+            <aside class="book-toc panel">
+              <div class="book-toc-head"><span>目 录</span><b id="book-toc-count"></b></div>
+              <div class="book-toc-list" id="book-toc-list"></div>
+              <div class="book-toc-foot">✦ 点击章节跳转阅读</div>
+            </aside>
+            <section class="book-stage">
+              <div class="book-shell">
+                <div class="book" id="book">
+                  <div class="book-page-left" id="book-page-left"></div>
+                  <div class="book-page-right" id="book-page-right"></div>
+                  <div class="book-spine"></div>
+                  <div class="book-flip" id="book-flip"></div>
+                </div>
+                <div class="book-indicator">第 <b id="book-page-no">1</b> / <span id="book-page-total">0</span> 页</div>
+                <div class="book-nav">
+                  <button class="secondary-button" type="button" id="book-prev">◀ 上一页</button>
+                  <button class="primary-button" type="button" id="book-next">下一页 ▶</button>
+                </div>
+              </div>
+              <div class="book-settings panel" id="book-settings">
+                <div class="book-setting-row"><span>字号</span><div class="book-opt-group" data-setting="fontSize"><button type="button" data-v="16">小</button><button type="button" data-v="19" class="active">中</button><button type="button" data-v="22">大</button><button type="button" data-v="25">特大</button></div></div>
+                <div class="book-setting-row"><span>行距</span><div class="book-opt-group" data-setting="lineHeight"><button type="button" data-v="1.5">紧凑</button><button type="button" data-v="1.8" class="active">标准</button><button type="button" data-v="2.1">宽松</button></div></div>
+                <div class="book-setting-row"><span>字体</span><div class="book-opt-group" data-setting="fontFamily"><button type="button" data-v="serif" class="active">宋体</button><button type="button" data-v="kai">楷体</button><button type="button" data-v="fang">仿宋</button><button type="button" data-v="hei">黑体</button></div></div>
+                <div class="book-setting-row"><span>纸面</span><div class="book-opt-group" data-setting="theme"><button type="button" data-v="xuan" class="active">宣纸</button><button type="button" data-v="parch">羊皮</button><button type="button" data-v="rice">米白</button><button type="button" data-v="celadon">青瓷</button><button type="button" data-v="night">暗夜</button></div></div>
+              </div>
+            </section>
+          </div>
+        </section>
+
         <section class="screen" id="models">
           <div class="page-heading"><div><p class="eyebrow">MODEL CONTROL CENTER</p><h1>模型管理</h1><p>在服务端集中维护 OpenAI Chat Completions 兼容模型。浏览器只保存显示状态，真实密钥永不返回前端。</p></div><div class="heading-actions"><button class="secondary-button" type="button" id="add-model">＋ 添加模型配置</button><button class="primary-button" type="button" id="save-models">保存路由策略</button></div></div>
           <div class="model-notice"><span>◈</span><p><b>安全边界：</b>真实实现中 API Key 仅由服务端环境读取；生成记录保存参数快照、上下文引用与输出摘要，不保存完整提示词或正文。</p></div>
@@ -119,6 +172,6 @@
     </div>
   </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="app.js?v=20260816z"></script>
+  <script src="app.js?v=20260816aa"></script>
 </body>
 </html>

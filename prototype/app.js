@@ -401,8 +401,8 @@ const STAGE_SCREENS = {
   blueprint_review: ["idea", "concept", "blueprint"],
   blueprint_confirmed: ["idea", "concept", "blueprint", "chapters"],
   chapter_planning: ["idea", "concept", "blueprint", "chapters", "workspace"],
-  writing: ["idea", "concept", "blueprint", "chapters", "workspace", "read"],
-  done: ["idea", "concept", "blueprint", "chapters", "workspace", "read"],
+  writing: ["idea", "concept", "blueprint", "chapters", "workspace", "read", "cover", "book"],
+  done: ["idea", "concept", "blueprint", "chapters", "workspace", "read", "cover", "book"],
 };
 const SCREEN_LOCK_HINTS = {
   concept: "该步骤尚未解锁：请先在「创意」页生成概念。",
@@ -410,6 +410,8 @@ const SCREEN_LOCK_HINTS = {
   chapters: "该步骤尚未解锁：请先确认蓝图，章节规划才会解锁。",
   workspace: "该步骤尚未解锁：请先生成章节计划，工作台才会解锁。",
   read: "该步骤尚未解锁：请按章节顺序推进写作，阅读模式在全书完成后解锁。",
+  cover: "该步骤尚未解锁：封面与插画在阅读模式生成后才能使用（可跳过）。",
+  book: "该步骤尚未解锁：实体书模式在阅读模式生成后才能使用。",
 };
 const API_BASE = "/api/v1";
 let apiAvailable = false;
@@ -781,6 +783,8 @@ function showScreen(id) {
   if (id === "blueprint") loadBlueprintForCurrentStory();
   if (id === "chapters") loadChaptersForCurrentStory();
   if (id === "read") loadReaderForCurrentStory();
+  if (id === "cover") loadCoverForCurrentStory();
+  if (id === "book") loadBookForCurrentStory();
   updateTopState();
   updateStepbarLock();
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1564,6 +1568,268 @@ function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
 }
 
+// ---------------------------------------------------------------------------
+// Phase 8: paper book reading mode (step 8) — centered paper book with page turn
+// ---------------------------------------------------------------------------
+
+let bookPages = [];              // 分页后的全部书页
+let bookIndex = 0;               // 当前右页索引（右页 = bookIndex，左页 = bookIndex - 1）
+let bookTurning = false;         // 翻页动画锁
+const BOOK_DEFAULT_SETTINGS = { fontSize: 19, lineHeight: 1.8, fontFamily: "serif", theme: "xuan" };
+let bookSettings = { ...BOOK_DEFAULT_SETTINGS };
+
+function loadBookSettings() {
+  try {
+    const raw = localStorage.getItem("novel-ignite:book-settings");
+    if (raw) bookSettings = { ...BOOK_DEFAULT_SETTINGS, ...JSON.parse(raw) };
+  } catch (e) { bookSettings = { ...BOOK_DEFAULT_SETTINGS }; }
+}
+
+function saveBookSettings() {
+  try { localStorage.setItem("novel-ignite:book-settings", JSON.stringify(bookSettings)); } catch (e) { /* ignore */ }
+}
+
+// 按字符容量分页：章首页 / 正文页。
+// 短段落累积填充到一页（直到接近容量），超长段落单独切分续页；场景标题显示在该场景首页页头。
+function paginateNovel(chapters) {
+  const cap = bookCharsPerPage();
+  const pages = [];
+  let chapterMeta = null;       // { no, title } 当前章节
+  let buf = [];                 // 当前页待结算的文本行
+  let bufLen = 0;
+  let headForNext = null;       // 下一页页头要显示的 { sceneTitle, sceneSub }
+
+  function flush() {
+    if (!buf.length) return;
+    pages.push({
+      kind: "prose",
+      chapterNo: chapterMeta ? chapterMeta.no : 0,
+      chapterTitle: chapterMeta ? chapterMeta.title : "",
+      sceneTitle: headForNext ? headForNext.sceneTitle : "",
+      sceneSub: headForNext ? headForNext.sceneSub : "",
+      text: buf.join("\n"),
+    });
+    buf = [];
+    bufLen = 0;
+    headForNext = null;
+  }
+
+  for (const ch of chapters) {
+    const scenes = ch.scenes || [];
+    let headPushed = false;
+    for (const sc of scenes) {
+      const beats = (sc.beats || []).filter((b) => b.markdown);
+      if (!beats.length) continue;
+      if (!headPushed) {
+        flush();
+        pages.push({ kind: "chapter", chapterNo: ch.ordinal, chapterTitle: ch.title || "未命名", text: "" });
+        headPushed = true;
+        chapterMeta = { no: ch.ordinal, title: ch.title || "未命名" };
+      }
+      const sceneLabel = sc.title || `场景 ${sc.ordinal}`;
+      const sceneSub = [sc.location, sc.time].filter(Boolean).join(" · ");
+      let sceneHeadDone = false;
+      for (const b of beats) {
+        const paras = String(b.markdown || "").split(/\n+/)
+          .map((s) => s.trim())
+          .map((s) => s.replace(/^#{1,6}\s*/, "").replace(/^\>+\s?/, "").replace(/\*\*(.+?)\*\*/g, "$1").replace(/\*(.+?)\*/g, "$1"))
+          .filter(Boolean);
+        for (const raw of paras) {
+          if (!sceneHeadDone) {
+            if (buf.length) flush();      // 当前页已有内容则开新页承载场景标题
+            headForNext = { sceneTitle: sceneLabel, sceneSub };
+            sceneHeadDone = true;
+          }
+          let rest = raw;
+          while (rest.length > cap) {
+            flush();
+            pages.push({
+              kind: "prose",
+              chapterNo: chapterMeta ? chapterMeta.no : 0,
+              chapterTitle: chapterMeta ? chapterMeta.title : "",
+              sceneTitle: headForNext ? headForNext.sceneTitle : "",
+              sceneSub: headForNext ? headForNext.sceneSub : "",
+              text: rest.slice(0, cap),
+            });
+            rest = rest.slice(cap);
+            headForNext = null;
+          }
+          if (!rest) continue;
+          if (bufLen + rest.length > cap && buf.length) flush();
+          buf.push(rest);
+          bufLen += rest.length;
+        }
+      }
+    }
+  }
+  flush();
+  return pages;
+}
+
+function bookCharsPerPage() {
+  const w = 440, h = 620;                 // 书页视觉尺寸
+  const padX = 108, padTop = 96, padBottom = 56;   // 左右内边距合计、上下内边距
+  const lineH = Math.max(16, Math.round(bookSettings.fontSize * bookSettings.lineHeight));
+  const charsPerLine = Math.max(8, Math.floor((w - padX) / bookSettings.fontSize));
+  const linesPerPage = Math.max(5, Math.floor((h - padTop - padBottom) / lineH));
+  return charsPerLine * linesPerPage;
+}
+
+function bookThemeClass() {
+  return "theme-" + (bookSettings.theme || "xuan");
+}
+
+function pageHtml(page) {
+  const theme = bookThemeClass();
+  if (!page) return `<div class="sheet-page ${theme} book-blank"><p>（空白页）</p></div>`;
+  if (page.kind === "chapter") {
+    return `<div class="sheet-page ${theme} chapter-page"><p class="page-chapter-no">第 ${page.chapterNo} 章</p><h1>${escapeHtml(page.chapterTitle || "")}</h1></div>`;
+  }
+  const sceneHead = page.sceneTitle
+    ? `<h4 class="page-scene-title">${escapeHtml(page.sceneTitle)}</h4>${page.sceneSub ? `<p class="page-scene-sub">${escapeHtml(page.sceneSub)}</p>` : ""}`
+    : "";
+  return `<div class="sheet-page ${theme} prose-page">${sceneHead}<p>${escapeHtml(page.text || "")}</p></div>`;
+}
+
+function renderBookOpen() {
+  const left = bookPages[bookIndex - 1] || null;
+  const right = bookPages[bookIndex] || null;
+  document.querySelector("#book-page-left").innerHTML = pageHtml(left);
+  document.querySelector("#book-page-right").innerHTML = pageHtml(right);
+  document.querySelector("#book").classList.toggle("at-start", bookIndex <= 0);
+  document.querySelector("#book").classList.toggle("at-end", bookIndex >= bookPages.length - 1);
+}
+
+function updateBookIndicator() {
+  const no = document.querySelector("#book-page-no");
+  const total = document.querySelector("#book-page-total");
+  if (no) no.textContent = bookIndex + 1;
+  if (total) total.textContent = bookPages.length;
+}
+
+function bookTurnNext() {
+  if (bookTurning || bookIndex >= bookPages.length - 1) return;
+  bookTurning = true;
+  const flip = document.querySelector("#book-flip");
+  // 翻页层：正面 = 当前右页（视觉连续），背面 = 纸面纹理；绕书脊翻到左侧。
+  flip.innerHTML = `<div class="flip-front">${pageHtml(bookPages[bookIndex])}</div><div class="flip-back"></div>`;
+  flip.classList.add("flip-next");
+  bookIndex += 1;
+  renderBookOpen();
+  updateBookIndicator();
+  requestAnimationFrame(() => flip.classList.add("turning"));
+  setTimeout(() => { flip.classList.remove("flip-next", "turning"); bookTurning = false; }, 950);
+}
+
+function bookTurnPrev() {
+  if (bookTurning || bookIndex <= 0) return;
+  bookTurning = true;
+  const flip = document.querySelector("#book-flip");
+  flip.innerHTML = `<div class="flip-front">${pageHtml(bookPages[bookIndex - 1] || null)}</div><div class="flip-back"></div>`;
+  flip.classList.add("flip-prev");
+  bookIndex -= 1;
+  renderBookOpen();
+  updateBookIndicator();
+  requestAnimationFrame(() => flip.classList.add("turning"));
+  setTimeout(() => { flip.classList.remove("flip-prev", "turning"); bookTurning = false; }, 950);
+}
+
+function renderBookToc(chapters) {
+  const list = document.querySelector("#book-toc-list");
+  document.querySelector("#book-toc-count").textContent = `${chapters.length} 章`;
+  if (!chapters.length) { list.innerHTML = `<div class="book-toc-empty"><p>暂无章节</p></div>`; return; }
+  list.innerHTML = chapters.map((c) => {
+    const written = (c.scenes || []).some((s) => (s.beats || []).length);
+    return `<button class="book-toc-row" type="button" data-book-chapter="${c.id}">
+      <span class="book-toc-no">第${String(c.ordinal).padStart(2, "0")}章</span>
+      <span class="book-toc-title">${escapeHtml(c.title || "未命名")}</span>
+      <span class="book-toc-dot ${written ? "" : "dim"}">${written ? "●" : "○"}</span>
+    </button>`;
+  }).join("");
+}
+
+function bookJumpToChapter(chapterId) {
+  const chapters = readerData?.chapters || [];
+  const idx = chapters.findIndex((c) => c.id === chapterId);
+  if (idx < 0 || !bookPages.length) return;
+  let target = -1;
+  for (let i = 0; i < bookPages.length; i += 1) {
+    if (bookPages[i].kind === "chapter" && bookPages[i].chapterNo === chapters[idx].ordinal) { target = i; break; }
+  }
+  if (target < 0) target = Math.min(bookIndex, bookPages.length - 1);
+  bookIndex = target;
+  renderBookOpen();
+  updateBookIndicator();
+}
+
+function applyBookSettingsUi() {
+  const root = document.querySelector(".book-layout");
+  if (!root) return;
+  root.style.setProperty("--bs-font-size", bookSettings.fontSize + "px");
+  root.style.setProperty("--bs-line-height", String(bookSettings.lineHeight));
+  root.style.setProperty("--bs-font-family", {
+    serif: '"Songti SC","Noto Serif SC",serif',
+    kai: '"KaiTi","STKaiti",serif',
+    fang: '"FangSong","STFangsong",serif',
+    hei: '"Heiti SC","Microsoft YaHei",sans-serif',
+  }[bookSettings.fontFamily] || "serif");
+  root.classList.remove("theme-xuan", "theme-parch", "theme-rice", "theme-celadon", "theme-night");
+  root.classList.add("theme-" + (bookSettings.theme || "xuan"));
+  document.querySelectorAll("#book-settings .book-opt-group").forEach((group) => {
+    const key = group.dataset.setting;
+    group.querySelectorAll("button").forEach((btn) => btn.classList.toggle("active", String(btn.dataset.v) === String(bookSettings[key])));
+  });
+  if (bookPages.length) {
+    const keep = Math.min(bookIndex, Math.max(0, bookPages.length - 1));
+    bookPages = paginateNovel(readerData?.chapters || []);
+    bookIndex = Math.min(keep, Math.max(0, bookPages.length - 1));
+    renderBookOpen();
+    updateBookIndicator();
+  }
+}
+
+async function loadBookForCurrentStory() {
+  const book = currentBook();
+  if (!apiAvailable || !book) return;
+  document.querySelector("#book-page-right").innerHTML = `<div class="sheet-page ${bookThemeClass()} book-empty"><p>正在装配纸质书…</p></div>`;
+  try {
+    readerData = await apiRequest(`/stories/${book.id}/read`, { timeoutMs: 60000 });
+    const chapters = readerData.chapters || [];
+    if (!chapters.length || !chapters.some((c) => (c.scenes || []).some((s) => (s.beats || []).length))) {
+      document.querySelector("#book-status").textContent = "尚无正文";
+      document.querySelector("#book-status").className = "tag";
+      renderBookToc(chapters);
+      document.querySelector("#book-page-left").innerHTML = "";
+      document.querySelector("#book-page-right").innerHTML = `<div class="sheet-page ${bookThemeClass()} book-empty"><p>完成章节写作并确认 Delta 后，即可在纸质书中阅读。</p></div>`;
+      return;
+    }
+    document.querySelector("#book-title").textContent = `${book.title} · 实体书`;
+    bookPages = paginateNovel(chapters);
+    bookIndex = 0;
+    applyBookSettingsUi();
+    renderBookToc(chapters);
+    renderBookOpen();
+    updateBookIndicator();
+    const done = chapters.length && chapters.every((c) => c.access_status === "completed");
+    document.querySelector("#book-status").textContent = done ? "全书完结 · 可通读" : "部分完成";
+    document.querySelector("#book-status").className = done ? "tag blue" : "tag";
+  } catch (error) {
+    document.querySelector("#book-page-right").innerHTML = `<div class="sheet-page ${bookThemeClass()} book-empty"><p>实体书加载失败，请稍后重试。</p></div>`;
+  }
+}
+
+async function loadCoverForCurrentStory() {
+  const book = currentBook();
+  if (!apiAvailable || !book) return;
+  try {
+    const work = await apiRequest(`/works/${book.id}`);
+    document.querySelector("#cover-title").textContent = work.title || "未命名作品";
+    document.querySelector("#cover-author").textContent = work.stage === "done" ? "全书完结 · 封面待生成" : "创作中 · 封面待生成";
+  } catch (e) {
+    document.querySelector("#cover-title").textContent = book.title || "未命名作品";
+  }
+}
+
 async function handleBackfillClick() {
   const book = currentBook();
   if (!apiAvailable || !book || !currentActiveChapterId) { toast("需要激活章节。"); return; }
@@ -1940,6 +2206,33 @@ function bindEvents() {
       if (chapter) renderReaderChapter(chapter);
     }
   });
+  // Phase 8: paper book — page turn, toc, settings, click & keyboard
+  document.querySelector("#book-next").addEventListener("click", () => bookTurnNext());
+  document.querySelector("#book-prev").addEventListener("click", () => bookTurnPrev());
+  document.querySelector("#book").addEventListener("click", (event) => {
+    if (event.target.closest(".book-page-right")) bookTurnNext();
+    else if (event.target.closest(".book-page-left")) bookTurnPrev();
+  });
+  document.querySelector("#book-toc-list").addEventListener("click", (event) => {
+    const row = event.target.closest("[data-book-chapter]");
+    if (row) bookJumpToChapter(row.dataset.bookChapter);
+  });
+  document.querySelector("#book-settings").addEventListener("click", (event) => {
+    const btn = event.target.closest(".book-opt-group button");
+    if (!btn) return;
+    const group = btn.closest(".book-opt-group");
+    const key = group.dataset.setting;
+    bookSettings[key] = key === "fontSize" || key === "lineHeight" ? Number(btn.dataset.v) : btn.dataset.v;
+    saveBookSettings();
+    applyBookSettingsUi();
+  });
+  // 键盘左右翻页（仅实体书页激活时）
+  document.addEventListener("keydown", (event) => {
+    const bookScreen = document.querySelector("#book");
+    if (!bookScreen || !bookScreen.classList.contains("active")) return;
+    if (event.key === "ArrowRight") { event.preventDefault(); bookTurnNext(); }
+    else if (event.key === "ArrowLeft") { event.preventDefault(); bookTurnPrev(); }
+  });
   document.querySelectorAll("[data-toast]").forEach((button) => button.addEventListener("click", () => toast(button.dataset.toast)));
   document.querySelector("#idea-input").addEventListener("input", (event) => {
     document.querySelector("#idea-count").textContent = `${event.target.value.length} / 2,000`;
@@ -2271,6 +2564,7 @@ async function bootstrap() {
   loadModelPromptProfiles();
   renderIdea();
   updateTopState();
+  loadBookSettings();
   bindEvents();
 }
 
