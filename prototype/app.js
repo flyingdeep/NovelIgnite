@@ -320,10 +320,10 @@ const blueprintData = {
 };
 
 const books = [
-  { id: "b1", title: "记忆拍卖场", subtitle: "科幻 · 悬疑 · 中篇", status: "inprogress", progress: "第 2 章 / 12 章", cover: ["#4d8dff", "#14243f"], updated: "2 小时前", stage: "writing", idea: "" },
-  { id: "b2", title: "雾中灯塔", subtitle: "情感 · 成长 · 短篇", status: "completed", progress: "已完成 · 8 章", cover: ["#50d6a1", "#0f352b"], updated: "3 天前", stage: "done", idea: "" },
-  { id: "b3", title: "废墟图书馆", subtitle: "奇幻 · 冒险 · 长篇", status: "inprogress", progress: "第 7 章 / 40 章", cover: ["#ac84ff", "#2b1d4d"], updated: "昨天", stage: "writing", idea: "" },
-  { id: "b4", title: "第七档案室", subtitle: "悬疑 · 惊悚 · 中篇", status: "inprogress", progress: "第 1 章 / 15 章", cover: ["#f2bc61", "#3d2c13"], updated: "刚刚", stage: "writing", idea: "" }
+  { id: "b1", title: "记忆拍卖场", subtitle: "科幻 · 悬疑 · 中篇", status: "inprogress", progress: "第 2 章 / 12 章", cover: ["#4d8dff", "#14243f"], updated: "2 小时前", stage: "writing", idea: "在记忆可以交易的近未来，一位失忆的鉴定师发现自己的过去正被分批拍卖。他必须潜入地下记忆市场，在找回真相与保护现在的自我之间做出选择。" },
+  { id: "b2", title: "雾中灯塔", subtitle: "情感 · 成长 · 短篇", status: "completed", progress: "已完成 · 8 章", cover: ["#50d6a1", "#0f352b"], updated: "3 天前", stage: "done", idea: "守塔人独自守护着海湾的灯塔，直到某天灯塔发出了一封写给多年后自己的信。" },
+  { id: "b3", title: "废墟图书馆", subtitle: "奇幻 · 冒险 · 长篇", status: "inprogress", progress: "第 7 章 / 40 章", cover: ["#ac84ff", "#2b1d4d"], updated: "昨天", stage: "writing", idea: "世界的图书馆沉入废墟，最后一位图书管理员必须修复知识的种子。" },
+  { id: "b4", title: "第七档案室", subtitle: "悬疑 · 惊悚 · 中篇", status: "inprogress", progress: "第 1 章 / 15 章", cover: ["#f2bc61", "#3d2c13"], updated: "刚刚", stage: "writing", idea: "编号第七的档案室里，每一份档案都封印着一段被删除的现实。" }
 ];
 
 const chapters = [
@@ -511,15 +511,16 @@ function getCoverColors(bookIndex) {
 function apiWorkToBook(work, index) {
   // 根据后端返回的cover_color，从预设主题中匹配对应的渐变颜色
   let cover = null;
-  for (const [top, bot] of COVER_THEMES) {
-    if (work.cover_color === bot) {
-      cover = [top, bot];
+  for (const theme of BOOK_COVER_THEMES) {
+    if (work.cover_color === theme.bot) {
+      cover = [theme.top, theme.bot];
       break;
     }
   }
   if (!cover) {
     // 如果后端没有设置或使用了默认颜色，使用索引匹配主题
-    cover = COVER_THEMES[index % COVER_THEMES.length];
+    const theme = BOOK_COVER_THEMES[index % BOOK_COVER_THEMES.length];
+    cover = [theme.top, theme.bot];
   }
   return {
     id: work.id,
@@ -536,11 +537,20 @@ function apiWorkToBook(work, index) {
 }
 
 async function loadWorksFromApi() {
+  console.log('loadWorksFromApi: starting...');
   try {
     const works = await apiRequest("/works");
-    books.splice(0, books.length, ...works.map((work, i) => apiWorkToBook(work, i)));
-    apiAvailable = true;
+    console.log('loadWorksFromApi: loaded', works?.length, 'works');
+    if (works && works.length > 0) {
+      books.splice(0, books.length, ...works.map((work, i) => apiWorkToBook(work, i)));
+      apiAvailable = true;
+      console.log('loadWorksFromApi: success, books count:', books.length);
+    } else {
+      console.warn('loadWorksFromApi: no works returned');
+      apiAvailable = false;
+    }
   } catch (error) {
+    console.error('loadWorksFromApi: error', error);
     apiAvailable = false;
   }
 }
@@ -2595,7 +2605,18 @@ function renderModels() {
 }
 
 async function bootstrap() {
+  // 先清空测试数据，确保从API加载真实数据
+  books.length = 0;
+  apiAvailable = false;
+  
   await loadWorksFromApi();
+  
+  // 如果API失败，回退到测试数据
+  if (!apiAvailable || books.length === 0) {
+    console.warn('API不可用或无作品，使用测试数据');
+    apiAvailable = false;
+  }
+  
   loadModelAvailability(); // 异步探测模型可用性（Ollama 远程服务器可能离线），不可用模型会置为禁用
   renderBlueprint();
   renderBooks();
