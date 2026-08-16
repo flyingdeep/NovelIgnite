@@ -62,7 +62,7 @@ py -3.13 -m uvicorn app.main:app --reload
 | llama.cpp（远端） | `http://106.75.216.144:57321/v1` | `qwen3.6-35b-a3b` | `LLAMACPP_API_KEY`（可选，通常无鉴权） | 支持 `response_format`；Qwen3.6 推理经 `chat_template_kwargs.enable_thinking` 开关（low 关闭）；**始终以流式请求**（绕开公网链路对非流式长请求的 ~60s 空闲断连） |
 
 - 推理强度（low/medium/high）按各模型官方文档传递：DeepSeek 顶层 `reasoning_effort`（medium 映射 high）、Agnes `chat_template_kwargs.enable_thinking`、Grok 顶层 `reasoning_effort`、llama.cpp（Qwen3.6）`chat_template_kwargs.enable_thinking`（low 视为关闭思考）。
-- 各模型最大输出按官方上限：Agnes 2.5 65.5K / DeepSeek v4-flash 384K / Grok 4.5 500K / llama.cpp 8K（服务器 ctx 16K，为输入留余量）；生成调用默认使用该上限。
+- 各模型最大输出按官方上限：Agnes 2.5 65.5K / DeepSeek v4-flash 384K / Grok 4.5 500K / llama.cpp 32K（服务器 16K ctx 未设输出上限，llama-server 会把输出自动压缩到 `n_ctx - prompt`，设大值仅作上限、备复杂长文）；生成调用默认使用该上限。
 - **模型可用性异步探测**：`GET /api/v1/models/availability` 返回每个模型的可用状态——llama.cpp 做真实网络探测（`GET {base}/models`，服务器离线则 `available=false`），其余按 API Key 是否配置判断；前端页面加载时异步调用，**不可用模型在生成设置下拉中置为禁用**（llama.cpp 离线时显示「离线 · 不可用」）。
 - llama.cpp 单次请求超时 300s（远端单并发 + 思考占用时间较长），其余模型沿用全局超时；llama.cpp 无鉴权，始终构建适配器（是否可用由探测决定）。
 

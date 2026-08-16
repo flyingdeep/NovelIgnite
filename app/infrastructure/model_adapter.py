@@ -36,8 +36,10 @@ MODEL_SPECS = (
     ModelSpec("deepseek", "DeepSeek V4 Flash", "deepseek-v4-flash", "https://api.deepseek.com/v1", "DEEPSEEK_API_KEY", True, "deepseek", 384000),
     ModelSpec("grok", "Grok 4.5", "grok-4.5", "https://modelflare.dev/v1", "GROK_API_KEY", False, "grok", 500000),
     # 远端 llama.cpp（通常无鉴权）：Qwen3.6 35B-A3B 推理型，chat_template_kwargs.enable_thinking 控制思考；JSON 模式可用。
-    # 服务器 ctx 16K（16384），max_output_tokens 取 8K 为输入留出余量；timeout=300：单并发排队 + 思考占用时间较长
-    ModelSpec("llamacpp", "Qwen3.6 35B A3B (llama.cpp)", "qwen3.6-35b-a3b", "http://106.75.216.144:57321/v1", "LLAMACPP_API_KEY", True, "llamacpp", 8192, timeout=300),
+    # 服务器 --ctx-size 16384 且未设输出上限：llama-server 会把输出自动压缩到 n_ctx - prompt，
+    # 因此 max_output_tokens 设大值无副作用（仅作为输出上限），为后续提高 ctx / 复杂长文留余量；
+    # timeout=300：单并发排队 + 思考占用时间较长
+    ModelSpec("llamacpp", "Qwen3.6 35B A3B (llama.cpp)", "qwen3.6-35b-a3b", "http://106.75.216.144:57321/v1", "LLAMACPP_API_KEY", True, "llamacpp", 32768, timeout=300),
 )
 
 

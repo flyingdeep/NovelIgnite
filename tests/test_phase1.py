@@ -82,7 +82,7 @@ def test_model_max_output_tokens_from_official_docs():
     assert limits["agnes"] == 65536  # Agnes 2.5 Flash：最大输出 65.5K
     assert limits["deepseek"] == 384000  # DeepSeek v4-flash：最大输出 384K
     assert limits["grok"] == 500000  # Grok 4.5：500K
-    assert limits["llamacpp"] == 8192  # llama.cpp：服务器 ctx 16K，输出取 8K 留输入余量
+    assert limits["llamacpp"] == 32768  # llama.cpp：服务器 16K ctx 未设输出上限，设大值备复杂长文（服务器自动压缩到 n_ctx - prompt）
 
 
 def test_adapter_uses_spec_max_tokens_by_default(monkeypatch):
@@ -129,7 +129,7 @@ def test_llamacpp_spec_registered():
     assert llamacpp.base_url == "http://106.75.216.144:57321/v1"
     assert llamacpp.supports_json is True
     assert llamacpp.thinking == "llamacpp"
-    assert llamacpp.max_output_tokens == 8192
+    assert llamacpp.max_output_tokens == 32768
 
 
 def test_llamacpp_thinking_params(monkeypatch):
