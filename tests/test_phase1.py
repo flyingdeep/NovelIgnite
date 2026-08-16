@@ -634,6 +634,30 @@ def test_prompts_module_covers_all_actions_and_versions():
     assert prompt_version("unknown_action") == 1
 
 
+def test_prose_prompts_require_lived_in_detail_and_plain_chinese():
+    """正文链路必须明确要求自然对话、触发式心理、参与叙事的环境与去模板化表达。"""
+    from app.infrastructure.prompts import PROMPT_VERSIONS, system_prompt
+
+    beat_prompt = system_prompt("generate_beat_plan")
+    prose_prompt = system_prompt("generate_scene")
+    review_prompt = system_prompt("readability_review")
+
+    assert "人物质感与细节分配" in beat_prompt
+    assert "有目的的对话" in beat_prompt
+    assert "环境不是布景板" in beat_prompt
+
+    assert "写出人在场" in prose_prompt
+    assert "心理活动要有来由" in prose_prompt
+    assert "环境参与叙事" in prose_prompt
+    assert "接近日常阅读习惯" in prose_prompt
+    assert "模板化、AI 腔" in review_prompt
+    assert "不得凭空增加新人物、新事实、新信息、新事件" in review_prompt
+
+    assert PROMPT_VERSIONS["generate_beat_plan"] == 4
+    assert PROMPT_VERSIONS["generate_scene"] == 5
+    assert PROMPT_VERSIONS["readability_review"] == 2
+
+
 def test_concept_prompt_preserves_author_intent():
     """概念生成提示词必须约束模型完整保留作者已提供的细节，不得删减/简化/改写。"""
     from app.infrastructure.prompts import system_prompt
