@@ -1698,8 +1698,8 @@ function renderBookOpen() {
   const right = bookPages[bookIndex] || null;
   document.querySelector("#book-page-left").innerHTML = pageHtml(left);
   document.querySelector("#book-page-right").innerHTML = pageHtml(right);
-  document.querySelector("#book").classList.toggle("at-start", bookIndex <= 0);
-  document.querySelector("#book").classList.toggle("at-end", bookIndex >= bookPages.length - 1);
+  document.querySelector("#paper-book").classList.toggle("at-start", bookIndex <= 0);
+  document.querySelector("#paper-book").classList.toggle("at-end", bookIndex >= bookPages.length - 1);
 }
 
 function updateBookIndicator() {
@@ -1713,8 +1713,8 @@ function bookTurnNext() {
   if (bookTurning || bookIndex >= bookPages.length - 1) return;
   bookTurning = true;
   const flip = document.querySelector("#book-flip");
-  // 翻页层：正面 = 当前右页（视觉连续），背面 = 纸面纹理；绕书脊翻到左侧。
-  flip.innerHTML = `<div class="flip-front">${pageHtml(bookPages[bookIndex])}</div><div class="flip-back"></div>`;
+  // 视觉翻页：正文立即刷新，只在右下角显示纸角翻起与阴影，避免整页文字翻转造成重影。
+  flip.innerHTML = `<div class="flip-corner"></div>`;
   flip.classList.add("flip-next");
   bookIndex += 1;
   renderBookOpen();
@@ -1727,7 +1727,8 @@ function bookTurnPrev() {
   if (bookTurning || bookIndex <= 0) return;
   bookTurning = true;
   const flip = document.querySelector("#book-flip");
-  flip.innerHTML = `<div class="flip-front">${pageHtml(bookPages[bookIndex - 1] || null)}</div><div class="flip-back"></div>`;
+  // 同样只保留左侧纸角翻起的视觉残留，不复制或翻转正文文字。
+  flip.innerHTML = `<div class="flip-corner"></div>`;
   flip.classList.add("flip-prev");
   bookIndex -= 1;
   renderBookOpen();
@@ -2211,7 +2212,7 @@ function bindEvents() {
   // Phase 8: paper book — page turn, toc, settings, click & keyboard
   document.querySelector("#book-next").addEventListener("click", () => bookTurnNext());
   document.querySelector("#book-prev").addEventListener("click", () => bookTurnPrev());
-  document.querySelector("#book").addEventListener("click", (event) => {
+  document.querySelector("#paper-book").addEventListener("click", (event) => {
     if (event.target.closest(".book-page-right")) bookTurnNext();
     else if (event.target.closest(".book-page-left")) bookTurnPrev();
   });
