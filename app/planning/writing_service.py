@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.infrastructure.model_adapter import build_adapters, extract_json
@@ -129,21 +129,47 @@ def apply_beat_prose(db: Session, story_id: str, chapter_id: str, scene_id: str,
 # Context & generation helpers
 # ---------------------------------------------------------------------------
 
-def _is_opening_beat(db: Session, chapter: Chapter, scene: Scene, beat: Beat, prior_prose: str) -> bool:
-    """判断当前 Beat 是否为全书开篇（第一个章节/场景/Beat，且无任何前序正文承接）。
+# 位置类型 → 生成 action 的映射（仅特殊位置使用独立提示词，其余回退 generate_scene）。
+_ACTION_BY_POSITION = {
+    "opening": "generate_opening_scene",
+    "ending": "generate_ending",
+}
 
-    开篇是读者第一次进入世界，无前情可依赖，需使用专门的开篇提示词（更高可读性、
-    世界观/主角/剧情引入标准）。后续 Beat 即使位于第一章也回到普通正文提示词。
+
+def _action_for_position(position: str) -> str:
+    return _ACTION_BY_POSITION.get(position, "generate_scene")
+
+
+def _beat_position(db: Session, chapter: Chapter, scene: Scene, beat: Beat, prior_prose: str) -> str:
+    """返回当前 Beat 在全书中的位置类型，用于选择提示词与注入位置信号。
+
+    返回值：
+    - "opening"：全书开篇（第一个章节/场景/Beat，且无任何前序正文承接）→ generate_opening_scene
+    - "ending"：全书结尾（最后一章最后一场景最后一 Beat）→ generate_ending
+    - "closing_chapter"：章节最后一个场景的收束 Beat（非全书结尾）→ generate_scene + 章节收束信号
+    - "closing_scene"：场景最后一个 Beat（非章节/全书结尾）→ generate_scene + 场景收束信号
+    - "middle"：其余 → generate_scene
+
+    让模型感知「正在写结尾」，在收束点使用结尾特有的文笔（达成结果、定格状态、
+    留钩子/余韵），而不是继续无差别地推进。
     """
-    if not (chapter.ordinal == 1 and scene.ordinal == 1 and beat.ordinal == 1):
-        return False
-    if prior_prose:
-        return False
-    if _latest_prev_beat_prose(db, scene, beat):
-        return False
-    if build_story_progress_summary(db, chapter.story_id):
-        return False
-    return True
+    last_beat_ordinal = db.scalar(select(func.max(Beat.ordinal)).where(Beat.scene_id == scene.id)) or 0
+    last_scene_ordinal = db.scalar(select(func.max(Scene.ordinal)).where(Scene.chapter_id == chapter.id)) or 0
+    last_chapter_ordinal = db.scalar(select(func.max(Chapter.ordinal)).where(Chapter.story_id == chapter.story_id)) or 0
+    is_last_beat = beat.ordinal == last_beat_ordinal
+    is_last_scene = scene.ordinal == last_scene_ordinal
+    is_last_chapter = chapter.ordinal == last_chapter_ordinal
+    # 开篇：第一个 Beat 且无前序正文承接（世界观/主角/剧情首次引入）。
+    if chapter.ordinal == 1 and scene.ordinal == 1 and beat.ordinal == 1 and not prior_prose:
+        if not _latest_prev_beat_prose(db, scene, beat) and not build_story_progress_summary(db, chapter.story_id):
+            return "opening"
+    if is_last_beat and is_last_scene and is_last_chapter:
+        return "ending"
+    if is_last_beat and is_last_scene:
+        return "closing_chapter"
+    if is_last_beat:
+        return "closing_scene"
+    return "middle"
 
 
 def _latest_prev_beat_prose(db: Session, scene: Scene, beat: Beat) -> str:
@@ -231,10 +257,16 @@ def _build_generation_messages(db: Session, chapter: Chapter, scene: Scene, beat
     # Beat 三要素：上一个 Beat 完整正文、上一个 Scene 摘要、全书进展摘要
     prev_beat_prose = _latest_prev_beat_prose(db, scene, beat)
     story_progress = build_story_progress_summary(db, chapter.story_id)
-    # 开篇判定：全书第一个章节、第一个场景、第一个 Beat，且确实没有前序正文承接时，
-    # 使用专门的开篇提示词（更高可读性 + 世界观/主角/剧情引入标准）。
-    is_opening = _is_opening_beat(db, chapter, scene, beat, prior_prose)
-    action = "generate_opening_scene" if is_opening else "generate_scene"
+    # 位置判定：开篇/结尾/章节收束/场景收束/中间。
+    # 开篇与全书结尾使用独立提示词（generate_opening_scene / generate_ending）；
+    # 场景/章节收束仍用 generate_scene，但注入位置信号让模型感知「正在写结尾」。
+    position = _beat_position(db, chapter, scene, beat, prior_prose)
+    action = _action_for_position(position)
+    position_hint = {
+        "ending": "【位置】本 Beat 是全书最后一个节拍：需完成全书主线收束，人物以符合其性格弧线的状态定格，结尾句留有余韵；不引入新冲突。",
+        "closing_chapter": "【位置】本 Beat 是本章最后一个场景的收束节拍：需完成本章目标、收束本章主线；章末可留下一个让读者想继续读下去的钩子（悬念/新信息/决定），但不展开新的完整冲突。",
+        "closing_scene": "【位置】本 Beat 是本场景的最后一个节拍：需完成本场景结果、定格场景状态；结尾可留下自然承接下一场景的张力，但不要提前展开下一场景内容。",
+    }.get(position, "")
     return [
         {"role": "system", "content": compose_system_prompt(db, model_provider, action)},
         {"role": "user", "content": (
@@ -243,7 +275,8 @@ def _build_generation_messages(db: Session, chapter: Chapter, scene: Scene, beat
             f"当前场景：{scene.title or ''}（地点：{scene.location or ''} · 时间：{scene.time or ''} · POV：{scene.pov or ''}）\n"
             f"场景目标：{scene.character_goals or ''}，冲突：{scene.conflict or ''}，关键事件：{scene.key_events or ''}，场景结果：{scene.scene_result or ''}\n"
             f"当前节拍：{beat.name or ''}\n"
-            f"节拍指令：{beat.instruction or ''}\n\n"
+            f"节拍指令：{beat.instruction or ''}\n"
+            f"{position_hint}\n\n"
             f"权威故事蓝图（聚焦当前场景的 POV 与地点；任何章节/场景/节拍写作都必须以此为准，不得违背或自创冲突设定）：\n{blueprint_ctx}\n\n"
             f"当前 POV 人物即时状态（来自本章入口快照，保持连贯，不要写与快照矛盾的状态）：\n{state_card or '（无）'}\n\n"
             f"{emotion_line}\n\n"
@@ -289,7 +322,7 @@ def _generate_beat(db: Session, story_id: str, chapter: Chapter, scene: Scene, b
     snapshot_state = json.loads(snapshot.state) if snapshot else {}
     prior = latest_prose(db, beat.id)
     prior_text = prior.markdown if prior and prior.status == "applied" else ""
-    action = "generate_opening_scene" if _is_opening_beat(db, chapter, scene, beat, prior_text) else "generate_scene"
+    action = _action_for_position(_beat_position(db, chapter, scene, beat, prior_text))
     task = _record_task(db, story_id, chapter, scene, beat, action, config)
     try:
         if adapter:

@@ -616,7 +616,8 @@ def test_chapter_plan_normalize_object_wrapper():
 ALL_GENERATION_ACTIONS = {
     "generate_concept", "generate_title", "generate_blueprint", "generate_chapter_plan",
     "generate_scene_plan", "generate_beat_plan", "generate_scene", "generate_opening_scene",
-    "scene_summary", "readability_review", "extract_delta", "consistency_check", "review_blueprint_updates",
+    "generate_ending", "scene_summary", "readability_review", "extract_delta",
+    "consistency_check", "review_blueprint_updates",
 }
 
 
@@ -675,6 +676,14 @@ def test_prose_prompts_require_lived_in_detail_and_plain_chinese():
     assert "开篇场景的更高标准" in opening_prompt
     assert "禁止三大机械感症状" in opening_prompt
     assert PROMPT_VERSIONS["generate_opening_scene"] == 1
+    
+    # 验证新增的结尾专用提示词存在且版本为1（收束/定格/呼应/余韵）
+    ending_prompt = system_prompt("generate_ending")
+    assert "收束主线" in ending_prompt
+    assert "人物定格" in ending_prompt
+    assert "余韵" in ending_prompt
+    assert "不引入新冲突" in ending_prompt
+    assert PROMPT_VERSIONS["generate_ending"] == 1
 
 
 def test_concept_prompt_preserves_author_intent():
