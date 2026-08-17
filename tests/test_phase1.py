@@ -615,8 +615,8 @@ def test_chapter_plan_normalize_object_wrapper():
 
 ALL_GENERATION_ACTIONS = {
     "generate_concept", "generate_title", "generate_blueprint", "generate_chapter_plan",
-    "generate_scene_plan", "generate_beat_plan", "generate_scene", "scene_summary",
-    "readability_review", "extract_delta", "consistency_check", "review_blueprint_updates",
+    "generate_scene_plan", "generate_beat_plan", "generate_scene", "generate_opening_scene",
+    "scene_summary", "readability_review", "extract_delta", "consistency_check", "review_blueprint_updates",
 }
 
 
@@ -635,7 +635,7 @@ def test_prompts_module_covers_all_actions_and_versions():
 
 
 def test_prose_prompts_require_lived_in_detail_and_plain_chinese():
-    """正文链路必须明确要求自然对话、触发式心理、参与叙事的环境与去模板化表达。"""
+    """正文链路必须明确要求自然对话、触发式心理、参与叙事的环境与去模板化表达；禁止三大机械感症状。"""
     from app.infrastructure.prompts import PROMPT_VERSIONS, system_prompt
 
     beat_prompt = system_prompt("generate_beat_plan")
@@ -650,12 +650,31 @@ def test_prose_prompts_require_lived_in_detail_and_plain_chinese():
     assert "心理活动要有来由" in prose_prompt
     assert "环境参与叙事" in prose_prompt
     assert "接近日常阅读习惯" in prose_prompt
+    
+    # 检查新增的三大机械感症状禁止项（v5→v6）
+    assert "禁止三大机械感症状" in prose_prompt
+    assert "微观分解症" in prose_prompt
+    assert "生硬比喻症" in prose_prompt
+    assert "抽象心理症" in prose_prompt
+    
     assert "模板化、AI 腔" in review_prompt
     assert "不得凭空增加新人物、新事实、新信息、新事件" in review_prompt
+    
+    # 检查review升级后的三大症状识别能力（v2→v3）
+    assert "特别关注三大机械感症状" in review_prompt
+    assert "微观分解症" in review_prompt
+    assert "生硬比喻症" in review_prompt
+    assert "抽象心理症" in review_prompt
 
     assert PROMPT_VERSIONS["generate_beat_plan"] == 4
-    assert PROMPT_VERSIONS["generate_scene"] == 5
-    assert PROMPT_VERSIONS["readability_review"] == 2
+    assert PROMPT_VERSIONS["generate_scene"] == 6  # v5→v6: 禁止三大症状
+    assert PROMPT_VERSIONS["readability_review"] == 4  # v2→v3: 加强识别修复能力；v3→v4: 细化修复规则
+    
+    # 验证新增的开篇专用提示词存在且版本为1
+    opening_prompt = system_prompt("generate_opening_scene")
+    assert "开篇场景的更高标准" in opening_prompt
+    assert "禁止三大机械感症状" in opening_prompt
+    assert PROMPT_VERSIONS["generate_opening_scene"] == 1
 
 
 def test_concept_prompt_preserves_author_intent():

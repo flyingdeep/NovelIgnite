@@ -129,6 +129,23 @@ def apply_beat_prose(db: Session, story_id: str, chapter_id: str, scene_id: str,
 # Context & generation helpers
 # ---------------------------------------------------------------------------
 
+def _is_opening_beat(db: Session, chapter: Chapter, scene: Scene, beat: Beat, prior_prose: str) -> bool:
+    """判断当前 Beat 是否为全书开篇（第一个章节/场景/Beat，且无任何前序正文承接）。
+
+    开篇是读者第一次进入世界，无前情可依赖，需使用专门的开篇提示词（更高可读性、
+    世界观/主角/剧情引入标准）。后续 Beat 即使位于第一章也回到普通正文提示词。
+    """
+    if not (chapter.ordinal == 1 and scene.ordinal == 1 and beat.ordinal == 1):
+        return False
+    if prior_prose:
+        return False
+    if _latest_prev_beat_prose(db, scene, beat):
+        return False
+    if build_story_progress_summary(db, chapter.story_id):
+        return False
+    return True
+
+
 def _latest_prev_beat_prose(db: Session, scene: Scene, beat: Beat) -> str:
     """取紧邻当前 Beat 的上一个 Beat 的完整已应用正文（跨场景向前追溯）。"""
     prev = db.scalar(select(Beat).where(Beat.scene_id == scene.id, Beat.ordinal < beat.ordinal).order_by(Beat.ordinal.desc()))
@@ -214,8 +231,12 @@ def _build_generation_messages(db: Session, chapter: Chapter, scene: Scene, beat
     # Beat 三要素：上一个 Beat 完整正文、上一个 Scene 摘要、全书进展摘要
     prev_beat_prose = _latest_prev_beat_prose(db, scene, beat)
     story_progress = build_story_progress_summary(db, chapter.story_id)
+    # 开篇判定：全书第一个章节、第一个场景、第一个 Beat，且确实没有前序正文承接时，
+    # 使用专门的开篇提示词（更高可读性 + 世界观/主角/剧情引入标准）。
+    is_opening = _is_opening_beat(db, chapter, scene, beat, prior_prose)
+    action = "generate_opening_scene" if is_opening else "generate_scene"
     return [
-        {"role": "system", "content": compose_system_prompt(db, model_provider, "generate_scene")},
+        {"role": "system", "content": compose_system_prompt(db, model_provider, action)},
         {"role": "user", "content": (
             f"章节目标：{chapter.goal or ''}\n"
             f"章节梗概：{chapter.summary or ''}\n"
@@ -268,11 +289,12 @@ def _generate_beat(db: Session, story_id: str, chapter: Chapter, scene: Scene, b
     snapshot_state = json.loads(snapshot.state) if snapshot else {}
     prior = latest_prose(db, beat.id)
     prior_text = prior.markdown if prior and prior.status == "applied" else ""
-    task = _record_task(db, story_id, chapter, scene, beat, "generate_scene", config)
+    action = "generate_opening_scene" if _is_opening_beat(db, chapter, scene, beat, prior_text) else "generate_scene"
+    task = _record_task(db, story_id, chapter, scene, beat, action, config)
     try:
         if adapter:
             messages = _build_generation_messages(db, chapter, scene, beat, snapshot_state, prior_text)
-            raw = adapter.complete(messages, temperature=config.temperature, reasoning_strength=config.reasoning_strength, json_mode=False, action="generate_scene")
+            raw = adapter.complete(messages, temperature=config.temperature, reasoning_strength=config.reasoning_strength, json_mode=False, action=action)
             markdown = (raw or "").strip() or _fallback_prose(beat, scene)
             # C·可读性自检：轻量重写（保持原意/情节/事实不变，只提升可读性与自然度）。
             # 失败或返回为空/原文时静默保持初稿，绝不阻塞写作。
